@@ -75,7 +75,12 @@ class Proxy:
         self.recorder = recorder
         self.client = httpx.AsyncClient(
             base_url=settings.llm_base_url,
-            timeout=settings.request_timeout,
+            timeout=httpx.Timeout(
+                connect=settings.connect_timeout,
+                read=settings.request_timeout,
+                write=settings.request_timeout,
+                pool=settings.connect_timeout,
+            ),
         )
         self.retry_policy = _build_retry_policy()
 

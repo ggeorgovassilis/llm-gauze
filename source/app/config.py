@@ -17,8 +17,14 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
-    # Upstream request timeout, in seconds.
+    # Upstream read/write timeout, in seconds (how long to wait for a
+    # response once connected — generation can be slow).
     request_timeout: float = 300.0
+
+    # Upstream connection timeout, in seconds (how long to wait to establish
+    # a TCP connection). Kept short so a dead/blackholed endpoint fails fast
+    # instead of hanging until request_timeout.
+    connect_timeout: float = 10.0
 
     # Where requests/responses are recorded.
     data_dir: str = "/data"

@@ -33,7 +33,11 @@ Copy `.env.example` to `.env` (done automatically by `dev.sh`) and adjust:
   `http://host.docker.internal:14434`, which reaches a host-side LLM on port
   14434 from inside the container.
 - `PORT` — the port the gateway listens on.
-- `REQUEST_TIMEOUT` — upstream timeout in seconds.
+- `REQUEST_TIMEOUT` — upstream read/write timeout in seconds (generation can be
+  slow).
+- `CONNECT_TIMEOUT` — upstream connection timeout in seconds; kept short so a
+  dead/blackholed endpoint fails fast instead of hanging until
+  `REQUEST_TIMEOUT`.
 
 Retries (transient upstream failures are retried with exponential backoff):
 

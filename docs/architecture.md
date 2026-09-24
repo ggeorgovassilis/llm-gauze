@@ -21,10 +21,13 @@ client ──▶ gateway (FastAPI) ──▶ recorder (JSONL)
                 └──▶ proxy ──▶ remediation ──▶ upstream local LLM
 ```
 
-- `app/config.py` — environment-driven settings (`.env`).
+- `app/config.py` — environment-driven settings (`.env`). Timeouts are split:
+  `connect_timeout` (fail fast on a dead endpoint) vs `request_timeout`
+  (read/write once connected — generation can be slow).
 - `app/main.py` — FastAPI app + routing (OpenAI-compatible surface).
 - `app/proxy.py` — forwarding seam; records each attempt and delegates
-  failure handling to the remediation pipeline.
+  failure handling to the remediation pipeline. Uses `httpx.Timeout` with
+  separate `connect`/`pool` and `read`/`write` values.
 - `app/recorder.py` — append-only JSONL recording of exchanges/attempts.
 - `app/remediation/` — the pluggable remediation pipeline (below).
 
@@ -48,17 +51,38 @@ failure ──▶ Detector (understanding) ──▶ Diagnosis ──▶ Backoff
 - `app/remediation/retry.py` — `RetryableDetector` (transient exceptions +
   retryable HTTP statuses) and `ExponentialBackoff` (with optional jitter).
 
+`RetryableDetector` classifies transport-level failures **by category**
+(`httpx.RequestError`, `OSError`, `TimeoutError`) rather than enumerating every
+possible exception, so any network/timeout error is retryable. Retryable HTTP
+statuses are configurable. Non-transient exceptions (bugs in our own code) are
+deliberately left unretryable so they surface instead of being masked.
+
 Future capabilities (sloppy-response cleanup, loop detection, context-window
 detection, ...) implement these interfaces rather than editing the proxy.
 
-## Future phases
+## Timeout model
+
+A single request timeout is not enough: the same value applied to *connecting*
+and to *reading a response* means a blackholed endpoint (packets dropped, no
+RST) hangs for the full request timeout before the first retry fires — which
+looks like an "immediate failure" to a client with a shorter timeout.
+
+- `CONNECT_TIMEOUT` — how long to establish a TCP connection; kept short
+  (default 10s) so a dead/blackholed endpoint fails fast.
+- `REQUEST_TIMEOUT` — read/write once connected; can be long (default 300s)
+  because generation is slow.
+
+These map onto `httpx.Timeout(connect=…, read=…, write=…, pool=…)`.
+
+## Phases
 
 Each phase is self-contained with clear acceptance criteria. The recorder's
 JSONL store is the shared substrate every subsequent phase reads from.
 
-1. **Stub** — compose, forwarding gateway, `.env` config, logging.
-2. **Retry** (current) — retry transient upstream failures with configurable
-   exponential backoff.
-3. **Detection** — analyse recorded exchanges, classify further failures.
+1. **Stub** — compose, forwarding gateway, `.env` config, logging. ✅
+2. **Retry** — retry transient upstream failures with configurable exponential
+   backoff, separated into collection/understanding/action. ✅
+3. **Detection** (current) — analyse recorded exchanges, classify further
+   failures.
 4. **Remediation** — sloppy-response cleanup, loop/context detection.
 5. **Streaming** — SSE pass-through and per-chunk handling.

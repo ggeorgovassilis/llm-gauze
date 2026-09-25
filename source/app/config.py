@@ -74,5 +74,21 @@ class Settings(BaseSettings):
     # HTTP status returned to the client when a loop is detected.
     loop_abort_status: int = 502
 
+    # --- Stall detection (silently hung streams) ---------------------
+    # Master switch for the stalled-stream detection feature.
+    stall_detection_enabled: bool = True
+
+    # Max wall-clock seconds to wait for the FIRST content-bearing token
+    # (thinking or response delta) after the upstream returns headers. Prefill
+    # on a large prompt is legitimately slow, so this is generous.
+    stall_ttft_seconds: float = 120.0
+
+    # Max wall-clock seconds between content-bearing tokens once generation has
+    # started. SSE keepalives/comments do NOT reset this — only real tokens do.
+    stall_gap_seconds: float = 60.0
+
+    # HTTP status returned to the client when a stall is detected.
+    stall_abort_status: int = 502
+
 
 settings = Settings()

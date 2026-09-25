@@ -60,6 +60,15 @@ repetitive output; a loop aborts the request with a `loop_detected` error):
 - `LOOP_COMPRESSION_MIN_CHARS` — min window length before the compression check.
 - `LOOP_ABORT_STATUS` — HTTP status returned when a loop is detected.
 
+Stall detection (a stream that returns headers but stops producing content
+tokens is aborted with a `stalled_detected` error; timers reset only on real
+tokens, never on SSE keepalives):
+
+- `STALL_DETECTION_ENABLED` — master switch for stall detection.
+- `STALL_TTFT_SECONDS` — max seconds to wait for the first content token.
+- `STALL_GAP_SECONDS` — max seconds between content tokens once started.
+- `STALL_ABORT_STATUS` — HTTP status returned when a stall is detected.
+
 Recording:
 
 - `DATA_DIR` / `RECORD_FILE` — where exchanges are recorded (JSONL).

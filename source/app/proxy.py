@@ -22,6 +22,7 @@ from app.recorder import Recorder
 from app.remediation.base import RetryPolicy, StreamVerdict
 from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
+from app.remediation.stall import StallDetector
 
 logger = logging.getLogger("bandaid.proxy")
 
@@ -204,16 +205,27 @@ def _filtered_headers(headers: dict) -> tuple[dict, str | None]:
     return out, content_type
 
 
-def _loop_error_response(verdict: StreamVerdict) -> Response:
-    """Build the client-facing response for an aborted loop."""
+def _abort_error_response(verdict: StreamVerdict) -> Response:
+    """Build the client-facing response for an aborted stream (loop/stall)."""
+    kind = verdict.kind
+    message = {
+        "loop": (
+            "The model entered a repetitive loop and the request was aborted."
+        ),
+        "stalled": (
+            "The model stopped producing output and the request was aborted."
+        ),
+    }.get(kind, f"The stream was aborted ({kind}).")
+    status_code = (
+        settings.loop_abort_status
+        if kind == "loop"
+        else settings.stall_abort_status
+    )
     body = json.dumps(
         {
             "error": {
-                "message": (
-                    "The model entered a repetitive loop and the request "
-                    "was aborted."
-                ),
-                "type": "loop_detected",
+                "message": message,
+                "type": f"{kind}_detected",
                 "reason": verdict.reason,
                 "details": verdict.details,
             }
@@ -221,7 +233,7 @@ def _loop_error_response(verdict: StreamVerdict) -> Response:
     ).encode("utf-8")
     return Response(
         content=body,
-        status_code=settings.loop_abort_status,
+        status_code=status_code,
         media_type="application/json",
     )
 
@@ -454,7 +466,31 @@ class Proxy:
                     resp_headers = dict(upstream.headers)
 
                     if status < 400:
-                        async for line in upstream.aiter_lines():
+                        stall = (
+                            StallDetector.from_settings()
+                            if settings.stall_detection_enabled
+                            else None
+                        )
+                        lines = upstream.aiter_lines()
+                        while True:
+                            # Bound each read by the stall budget. Keepalive/
+                            # comment lines arrive without resetting the timer,
+                            # so a connection kept open by pings still trips the
+                            # watchdog once the model goes silent.
+                            timeout = (
+                                max(0.0, stall.remaining()) if stall else None
+                            )
+                            try:
+                                line = await asyncio.wait_for(
+                                    anext(lines), timeout=timeout
+                                )
+                            except asyncio.TimeoutError:
+                                loop_verdict = stall.verdict()
+                                loop_stream = "stalled"
+                                break
+                            except StopAsyncIteration:
+                                break
+
                             if not line or not line.startswith("data:"):
                                 continue
                             # Keep the raw SSE line so a streaming client can
@@ -476,6 +512,12 @@ class Proxy:
                             ) = _extract_stream_chunk(chunk)
                             _merge_meta(meta, chunk_meta)
                             _merge_tool_calls(tool_calls, delta_tool_calls)
+
+                            # Only a content-bearing token proves the model is
+                            # alive; reset the stall watchdog on those.
+                            if delta_reasoning or delta_content:
+                                if stall is not None:
+                                    stall.note_token()
 
                             if delta_reasoning:
                                 reasoning += delta_reasoning
@@ -516,7 +558,8 @@ class Proxy:
                     diagnosis,
                 )
 
-            # Loop -> terminal (never retry; retrying just re-enters the loop).
+            # Content verdict (loop or stalled) -> terminal; never retry.
+            # Retrying just re-enters the loop, or re-waits for a silent model.
             if loop_verdict is not None:
                 self.recorder.record(
                     {
@@ -524,20 +567,21 @@ class Proxy:
                         "attempt": attempt,
                         "max_attempts": policy.max_attempts,
                         "status": status,
-                        "loop_detected": True,
-                        "loop_stream": loop_stream,
-                        "loop_reason": loop_verdict.reason,
-                        "loop_details": loop_verdict.details,
+                        "abort_kind": loop_verdict.kind,
+                        "abort_stream": loop_stream,
+                        "abort_reason": loop_verdict.reason,
+                        "abort_details": loop_verdict.details,
                         "duration": time.time() - started,
                     }
                 )
                 logger.error(
-                    "LOOP DETECTED request_id=%s stream=%s reason=%s",
+                    "%s DETECTED request_id=%s stream=%s reason=%s",
+                    loop_verdict.kind.upper(),
                     request_id,
                     loop_stream,
                     loop_verdict.reason,
                 )
-                return _loop_error_response(loop_verdict)
+                return _abort_error_response(loop_verdict)
 
             # Transport error -> retry or give up (mirrors the buffered path).
             if error is not None:

@@ -21,6 +21,7 @@ from app.remediation.base import (
 )
 from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
+from app.remediation.stall import StallDetector
 
 __all__ = [
     "Backoff",
@@ -32,4 +33,5 @@ __all__ = [
     "ExponentialBackoff",
     "RetryableDetector",
     "ThinkingLoopDetector",
+    "StallDetector",
 ]

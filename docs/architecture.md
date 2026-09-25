@@ -53,6 +53,8 @@ failure ──▶ Detector (understanding) ──▶ Diagnosis ──▶ Backoff
 - `app/remediation/loop.py` — `ThinkingLoopDetector`, a stateful
   `StreamDetector` that flags repetitive output via n-gram recurrence and low
   compression entropy.
+- `app/remediation/stall.py` — `StallDetector`, a time-based watchdog that
+  flags a stream which has stopped producing content tokens (silent hang).
 
 `RetryableDetector` classifies transport-level failures **by category**
 (`httpx.RequestError`, `OSError`, `TimeoutError`) rather than enumerating every
@@ -79,7 +81,7 @@ transport/status failures), so the gateway observes output as it is generated:
   not a loop.
 - Each detector is stateful and created fresh per request (with `reset()`),
   never shared across concurrent requests.
-- On detection the gateway logs it prominently, records a `loop_detected`
+- On detection the gateway logs it prominently, records an `abort_kind`
   diagnosis, aborts the upstream request (no retry — retrying just re-enters
   the loop), and returns a `loop_abort_status` error to the client.
 
@@ -89,6 +91,35 @@ Detection uses two independent signals, both configurable via `.env`:
    window of recent sentences (`LOOP_*` settings).
 2. **low compression entropy** — zlib compression ratio of the window text,
    gated by a minimum window length.
+
+
+## Stall detection
+
+A model can return HTTP 200 headers and then emit nothing at all. Loop
+detection never fires in this case (there is no text to observe), and a plain
+per-read timeout is defeated by upstream keepalives — LiteLLM held the SSE
+connection open with comment frames, so every read succeeded while no token
+ever arrived. The result is a request that hangs indefinitely.
+
+Stall detection is therefore a **time** signal rather than a content signal:
+
+- Two wall-clock deadlines, anchored to *content-bearing* tokens only (thinking
+  or response deltas). SSE keepalives/comment lines and empty frames never
+  reset the timer.
+- **time-to-first-token** (`STALL_TTFT_SECONDS`) — generous, because prefill on
+  a large prompt is legitimately slow.
+- **inter-token gap** (`STALL_GAP_SECONDS`) — tighter, once generation has
+  begun.
+- The streaming loop bounds each read with `asyncio.wait_for` using the
+  detector's remaining budget, so a silent stream trips the watchdog even while
+  keepalives continue to arrive.
+- On detection the gateway records `abort_kind=stalled` and returns a
+  `stall_abort_status` error (never retried).
+
+Unlike `ThinkingLoopDetector`, `StallDetector` observes time, not text, so it
+is driven directly by the streaming loop rather than through the
+`StreamDetector.feed()` interface. It takes an injectable monotonic clock so it
+is unit-testable without sleeping.
 
 
 ## Timeout model

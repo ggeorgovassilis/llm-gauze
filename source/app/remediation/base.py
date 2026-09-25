@@ -21,6 +21,10 @@ class Diagnosis:
 
     retryable: bool
     reason: str
+    # Optional machine-readable code (e.g. ``"context_window_exceeded"``) that
+    # lets the proxy route a verdict to a bespoke response instead of the
+    # generic pass-through/502 path. ``None`` for plain retry/status verdicts.
+    code: str | None = None
 
     def __str__(self) -> str:
         return self.reason
@@ -34,8 +38,14 @@ class Detector(ABC):
         """Classify an exception raised while contacting the upstream."""
 
     @abstractmethod
-    def diagnose_status(self, status: int) -> Diagnosis:
-        """Classify an HTTP status returned by the upstream."""
+    def diagnose_status(
+        self, status: int, body: bytes | None = None
+    ) -> Diagnosis:
+        """Classify an HTTP status returned by the upstream.
+
+        ``body`` carries the upstream response payload when available, so
+        body-aware detectors (e.g. context-window overflow) can inspect it.
+        """
 
 
 class Backoff(ABC):

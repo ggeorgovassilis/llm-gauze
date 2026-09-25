@@ -19,6 +19,7 @@ from app.remediation.base import (
     StreamDetector,
     StreamVerdict,
 )
+from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
 from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.stall import StallDetector
@@ -34,4 +35,6 @@ __all__ = [
     "RetryableDetector",
     "ThinkingLoopDetector",
     "StallDetector",
+    "ContextWindowDetector",
+    "CONTEXT_WINDOW_CODE",
 ]

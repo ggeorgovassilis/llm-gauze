@@ -69,6 +69,16 @@ tokens, never on SSE keepalives):
 - `STALL_GAP_SECONDS` — max seconds between content tokens once started.
 - `STALL_ABORT_STATUS` — HTTP status returned when a stall is detected.
 
+Context-window overflow (the upstream's context-window-fill error is matched
+by exact substring and failed fast with a `context_window_exceeded` error
+instead of being retried):
+
+- `CONTEXT_WINDOW_DETECTION_ENABLED` — master switch for context-window detection.
+- `CONTEXT_WINDOW_MARKERS` — comma-separated substrings (case-insensitive) that
+  signal a full context window.
+- `CONTEXT_WINDOW_ABORT_STATUS` — HTTP status returned when an overflow is
+  recognised (default 413).
+
 Recording:
 
 - `DATA_DIR` / `RECORD_FILE` — where exchanges are recorded (JSONL).
@@ -87,5 +97,5 @@ phases to come.
 - Error detection & remediation pipeline (modular, pluggable).
 - Sloppy-response cleanup (`<think>` tags, malformed tool calls).
 - ~~Stuck/loop detection.~~
-- Context-window detection.
+- ~~Context-window detection.~~
 - Streaming pass-through.

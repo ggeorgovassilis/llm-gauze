@@ -55,6 +55,8 @@ failure ──▶ Detector (understanding) ──▶ Diagnosis ──▶ Backoff
   compression entropy.
 - `app/remediation/stall.py` — `StallDetector`, a time-based watchdog that
   flags a stream which has stopped producing content tokens (silent hang).
+- `app/remediation/context.py` — `ContextWindowDetector`, which recognises the
+  upstream's context-window-fill error and reclassifies it non-retryable.
 
 `RetryableDetector` classifies transport-level failures **by category**
 (`httpx.RequestError`, `OSError`, `TimeoutError`) rather than enumerating every
@@ -62,8 +64,8 @@ possible exception, so any network/timeout error is retryable. Retryable HTTP
 statuses are configurable. Non-transient exceptions (bugs in our own code) are
 deliberately left unretryable so they surface instead of being masked.
 
-Future capabilities (sloppy-response cleanup, context-window detection, ...)
-implement these interfaces rather than editing the proxy.
+Future capabilities (sloppy-response cleanup, ...) implement these interfaces
+rather than editing the proxy.
 
 ## Loop detection
 
@@ -120,6 +122,28 @@ Unlike `ThinkingLoopDetector`, `StallDetector` observes time, not text, so it
 is driven directly by the streaming loop rather than through the
 `StreamDetector.feed()` interface. It takes an injectable monotonic clock so it
 is unit-testable without sleeping.
+
+
+## Context-window overflow
+
+llama.cpp rejects a request that no longer fits its context window with a
+**deterministic error message** carried in the HTTP response body (or, from a
+few stacks, an exception message) — never a dedicated status code. Retrying
+cannot succeed: the same oversized input fails identically on every attempt.
+
+Context-window detection is therefore a **message** signal, classified before
+the retry decision:
+
+- `ContextWindowDetector` wraps the retryable-status detector and matches a set
+  of exact, case-insensitive substrings (`CONTEXT_WINDOW_MARKERS`). Exact
+  matching keeps it free of false positives — no fuzzy heuristics.
+- A match produces `Diagnosis(retryable=False, code="context_window_exceeded")`,
+  which short-circuits the retry loop and returns a precise
+  `context_window_abort_status` error (default 413 Payload Too Large) with a
+  named `context_window_exceeded` body instead of a generic 502.
+- The detector inspects both the buffered forward path (response body) and the
+  streaming path (error body / transport exception), so both request shapes
+  fail fast on a full context window.
 
 
 ## Timeout model

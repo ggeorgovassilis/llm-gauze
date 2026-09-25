@@ -20,6 +20,7 @@ from fastapi.responses import Response
 from app.config import settings
 from app.recorder import Recorder
 from app.remediation.base import RetryPolicy, StreamVerdict
+from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
 from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.stall import StallDetector
@@ -55,7 +56,10 @@ def _diagnosis_entry(diagnosis) -> dict | None:
     """Serialize a ``Diagnosis`` for the recorder."""
     if not diagnosis:
         return None
-    return {"retryable": diagnosis.retryable, "reason": diagnosis.reason}
+    entry = {"retryable": diagnosis.retryable, "reason": diagnosis.reason}
+    if diagnosis.code:
+        entry["code"] = diagnosis.code
+    return entry
 
 
 def _is_chat_completion(path: str) -> bool:
@@ -239,6 +243,31 @@ def _abort_error_response(verdict: StreamVerdict) -> Response:
     )
 
 
+def _context_window_error_response(
+    status: int | None, diagnosis
+) -> Response:
+    """Build the client-facing response for a context-window overflow.
+
+    The upstream told us the request cannot fit its context window; retrying
+    cannot help, so surface a precise, named error instead of a generic 502.
+    """
+    body = json.dumps(
+        {
+            "error": {
+                "message": "context window exceeded",
+                "type": CONTEXT_WINDOW_CODE,
+                "reason": diagnosis.reason,
+                "details": {"upstream_status": status},
+            }
+        }
+    ).encode("utf-8")
+    return Response(
+        content=body,
+        status_code=settings.context_window_abort_status,
+        media_type="application/json",
+    )
+
+
 def _build_retry_policy() -> RetryPolicy:
     """Assemble the retry policy (understanding + action) from settings."""
     statuses = {
@@ -247,6 +276,8 @@ def _build_retry_policy() -> RetryPolicy:
         if s.strip()
     }
     detector = RetryableDetector(statuses)
+    if settings.context_window_detection_enabled:
+        detector = ContextWindowDetector.from_settings(detector)
     backoff = ExponentialBackoff(
         initial=settings.retry_backoff_initial,
         base=settings.retry_backoff_base,
@@ -330,7 +361,9 @@ class Proxy:
                 status = upstream.status_code
                 resp_headers = dict(upstream.headers)
                 resp_body = upstream.content
-                diagnosis = policy.detector.diagnose_status(status)
+                diagnosis = policy.detector.diagnose_status(
+                    status, body=resp_body
+                )
             except Exception as exc:  # noqa: BLE001 - capture everything
                 error = {
                     "type": type(exc).__name__,
@@ -355,14 +388,7 @@ class Proxy:
                     "response_headers": resp_headers,
                     "response_body": _decode(resp_body),
                     "error": error,
-                    "diagnosis": (
-                        {
-                            "retryable": diagnosis.retryable,
-                            "reason": diagnosis.reason,
-                        }
-                        if diagnosis
-                        else None
-                    ),
+                    "diagnosis": _diagnosis_entry(diagnosis),
                     "duration": time.time() - started,
                 }
             )
@@ -387,6 +413,16 @@ class Proxy:
                 )
                 await asyncio.sleep(delay)
                 continue
+
+            if (
+                diagnosis is not None
+                and diagnosis.code == CONTEXT_WINDOW_CODE
+            ):
+                telemetry.incr(
+                    "requests_total", {"outcome": "context_window_exceeded"}
+                )
+                telemetry.incr("context_window_aborts_total")
+                return _context_window_error_response(status, diagnosis)
 
             if status is None:
                 final_status = 502
@@ -627,6 +663,16 @@ class Proxy:
                         "duration": time.time() - started,
                     }
                 )
+                if (
+                    diagnosis is not None
+                    and diagnosis.code == CONTEXT_WINDOW_CODE
+                ):
+                    telemetry.incr(
+                        "requests_total",
+                        {"outcome": "context_window_exceeded"},
+                    )
+                    telemetry.incr("context_window_aborts_total")
+                    return _context_window_error_response(status, diagnosis)
                 if policy.should_retry(diagnosis, attempt):
                     delay = policy.backoff.delay(attempt)
                     telemetry.incr("retries_total")
@@ -647,7 +693,9 @@ class Proxy:
 
             # HTTP error status -> retry or return it.
             if status is not None and status >= 400:
-                diagnosis = policy.detector.diagnose_status(status)
+                diagnosis = policy.detector.diagnose_status(
+                    status, body=error_body
+                )
                 self.recorder.record(
                     {
                         **base_entry,
@@ -659,6 +707,16 @@ class Proxy:
                         "duration": time.time() - started,
                     }
                 )
+                if (
+                    diagnosis is not None
+                    and diagnosis.code == CONTEXT_WINDOW_CODE
+                ):
+                    telemetry.incr(
+                        "requests_total",
+                        {"outcome": "context_window_exceeded"},
+                    )
+                    telemetry.incr("context_window_aborts_total")
+                    return _context_window_error_response(status, diagnosis)
                 if policy.should_retry(diagnosis, attempt):
                     delay = policy.backoff.delay(attempt)
                     telemetry.incr("retries_total")

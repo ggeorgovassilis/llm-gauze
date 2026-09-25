@@ -47,7 +47,9 @@ class RetryableDetector(Detector):
             reason=f"non-retryable exception {type(exc).__name__}: {exc}",
         )
 
-    def diagnose_status(self, status: int) -> Diagnosis:
+    def diagnose_status(
+        self, status: int, body: bytes | None = None
+    ) -> Diagnosis:
         if status in self.retryable_statuses:
             return Diagnosis(
                 retryable=True, reason=f"retryable HTTP status {status}"

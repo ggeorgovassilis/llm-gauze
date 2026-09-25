@@ -90,5 +90,28 @@ class Settings(BaseSettings):
     # HTTP status returned to the client when a stall is detected.
     stall_abort_status: int = 502
 
+    # --- Context-window overflow -------------------------------------
+    # Master switch for recognising the upstream's context-window-fill error
+    # and failing fast (instead of retrying a doomed request).
+    context_window_detection_enabled: bool = True
+
+    # Comma-separated substrings (matched case-insensitively) that the upstream
+    # emits when the context window fills. Kept exact to avoid false positives;
+    # override for other providers/versions.
+    context_window_markers: str = (
+        "exceeded the context window,"
+        "context window exceeded,"
+        "context length exceeded,"
+        "maximum context length,"
+        "prompt is too long,"
+        "prompt is longer than the context,"
+        "input is too long,"
+        "ran out of context"
+    )
+
+    # HTTP status returned to the client when a context-window overflow is
+    # recognised (413 Payload Too Large: the request cannot fit the model).
+    context_window_abort_status: int = 413
+
 
 settings = Settings()

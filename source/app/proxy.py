@@ -75,12 +75,32 @@ def _ensure_stream(body: bytes) -> tuple[bytes, str]:
     return json.dumps(data).encode("utf-8"), "application/json"
 
 
-def _extract_stream_chunk(chunk: dict) -> tuple[str | None, str | None, dict]:
-    """Pull (content, reasoning, meta) out of one SSE ``data`` payload.
+def _client_wants_stream(body: bytes) -> bool:
+    """Whether the client asked for a streaming (SSE) response.
+
+    Clients such as Copilot always send ``stream: true`` and expect the
+    response back as SSE ``data:`` events. If we answer a streaming request
+    with a plain JSON body, the client's SSE parser yields zero completions.
+    """
+    if not body:
+        return False
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    return bool(data.get("stream"))
+
+
+def _extract_stream_chunk(
+    chunk: dict,
+) -> tuple[str | None, str | None, list | None, dict]:
+    """Pull (content, reasoning, tool_calls, meta) from one SSE payload.
 
     Tolerates the common OpenAI-compatible shapes: ``delta`` vs ``message``,
-    and ``reasoning_content`` / ``reasoning`` / ``thinking`` for the thinking
-    stream.
+    ``reasoning_content`` / ``reasoning`` / ``thinking`` for the thinking
+    stream, and streaming ``tool_calls`` fragments for tool use.
     """
     choices = chunk.get("choices") or []
     choice = choices[0] if choices else {}
@@ -91,6 +111,7 @@ def _extract_stream_chunk(chunk: dict) -> tuple[str | None, str | None, dict]:
         or delta.get("reasoning")
         or delta.get("thinking")
     )
+    tool_calls = delta.get("tool_calls")
     meta = {
         "id": chunk.get("id"),
         "model": chunk.get("model"),
@@ -99,7 +120,7 @@ def _extract_stream_chunk(chunk: dict) -> tuple[str | None, str | None, dict]:
         "finish_reason": choice.get("finish_reason"),
         "usage": chunk.get("usage"),
     }
-    return content, reasoning, meta
+    return content, reasoning, tool_calls, meta
 
 
 def _merge_meta(meta: dict, chunk_meta: dict) -> None:
@@ -109,8 +130,40 @@ def _merge_meta(meta: dict, chunk_meta: dict) -> None:
             meta[key] = value
 
 
+def _merge_tool_calls(accumulator: list, deltas: list | None) -> None:
+    """Accumulate OpenAI streaming tool-call fragments by ``index``.
+
+    The first fragment carries ``id`` / ``type`` / ``function.name``; later
+    fragments append to ``function.arguments``. Fragments for the same index
+    are merged into one entry.
+    """
+    for fragment in deltas or []:
+        if not isinstance(fragment, dict):
+            continue
+        index = fragment.get("index", 0)
+        while len(accumulator) <= index:
+            accumulator.append({})
+        slot = accumulator[index]
+        for key, value in fragment.items():
+            if key == "index":
+                continue
+            if key == "function" and isinstance(value, dict):
+                fn = slot.setdefault("function", {})
+                for fkey, fval in value.items():
+                    if fkey == "arguments":
+                        if fval is not None:
+                            fn["arguments"] = fn.get("arguments", "") + fval
+                    elif fval is not None:
+                        fn[fkey] = fval
+            elif value is not None:
+                slot[key] = value
+
+
 def _reconstruct_chat_completion(
-    meta: dict, content: str, reasoning: str
+    meta: dict,
+    content: str,
+    reasoning: str,
+    tool_calls: list | None = None,
 ) -> dict:
     """Reassemble a non-streaming ``chat.completion`` from streamed deltas."""
     message: dict = {"role": meta.get("role") or "assistant"}
@@ -118,6 +171,8 @@ def _reconstruct_chat_completion(
         message["content"] = content
     if reasoning:
         message["reasoning_content"] = reasoning
+    if tool_calls:
+        message["tool_calls"] = tool_calls
     body = {
         "id": meta.get("id") or uuid.uuid4().hex,
         "object": "chat.completion",
@@ -354,9 +409,19 @@ class Proxy:
         re-enters the loop).
         """
         stream_body, content_type = _ensure_stream(body)
-        out_headers = dict(headers)
+        # `_ensure_stream` rewrites the body (stream forced on, JSON
+        # re-serialised), so any inbound Content-Length is stale. Drop it and
+        # let httpx recompute it from the actual body; forwarding the stale
+        # value makes h11 raise "Too much data for declared Content-Length".
+        out_headers = {
+            k: v for k, v in headers.items() if k.lower() != "content-length"
+        }
         if content_type:
             out_headers["content-type"] = content_type
+
+        # A streaming client (stream: true) needs SSE back; a non-streaming
+        # client gets the reconstructed chat.completion. See `_client_wants_stream`.
+        client_wants_stream = _client_wants_stream(body)
 
         policy = self.retry_policy
         for attempt in range(1, policy.max_attempts + 1):
@@ -368,6 +433,8 @@ class Proxy:
             diagnosis = None
             content = ""
             reasoning = ""
+            tool_calls: list = []
+            sse_lines: list[str] = []
             meta: dict = {}
             loop_verdict: StreamVerdict | None = None
             loop_stream: str | None = None
@@ -390,6 +457,9 @@ class Proxy:
                         async for line in upstream.aiter_lines():
                             if not line or not line.startswith("data:"):
                                 continue
+                            # Keep the raw SSE line so a streaming client can
+                            # be served the upstream's exact event framing.
+                            sse_lines.append(line)
                             payload = line[5:].strip()
                             if not payload or payload == "[DONE]":
                                 continue
@@ -398,10 +468,14 @@ class Proxy:
                             except json.JSONDecodeError:
                                 continue
 
-                            delta_content, delta_reasoning, chunk_meta = (
-                                _extract_stream_chunk(chunk)
-                            )
+                            (
+                                delta_content,
+                                delta_reasoning,
+                                delta_tool_calls,
+                                chunk_meta,
+                            ) = _extract_stream_chunk(chunk)
                             _merge_meta(meta, chunk_meta)
+                            _merge_tool_calls(tool_calls, delta_tool_calls)
 
                             if delta_reasoning:
                                 reasoning += delta_reasoning
@@ -527,9 +601,13 @@ class Proxy:
                     media_type=ctype,
                 )
 
-            # Success: reconstruct a non-streaming chat.completion.
+            # Success: reconstruct a non-streaming chat.completion for
+            # recording, and serve the client in its requested shape —
+            # SSE passthrough for streaming clients, plain JSON otherwise.
             final_body = json.dumps(
-                _reconstruct_chat_completion(meta, content, reasoning)
+                _reconstruct_chat_completion(
+                    meta, content, reasoning, tool_calls
+                )
             ).encode("utf-8")
             self.recorder.record(
                 {
@@ -539,10 +617,25 @@ class Proxy:
                     "status": status,
                     "response_headers": resp_headers,
                     "response_body": _decode(final_body),
+                    "streamed": client_wants_stream,
                     "diagnosis": None,
                     "duration": time.time() - started,
                 }
             )
+            if client_wants_stream:
+                lines = list(sse_lines)
+                # Guarantee a clean SSE termination even if the upstream
+                # omits the ``[DONE]`` sentinel (some providers do).
+                if not lines or lines[-1].strip() != "data: [DONE]":
+                    lines.append("data: [DONE]")
+                sse_body = "".join(
+                    f"{line}\n\n" for line in lines
+                ).encode("utf-8")
+                return Response(
+                    content=sse_body,
+                    status_code=200,
+                    media_type="text/event-stream",
+                )
             return Response(
                 content=final_body,
                 status_code=200,

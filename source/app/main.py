@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, Response
 from app.config import settings
 from app.proxy import Proxy
 from app.recorder import Recorder
+from app.telemetry import telemetry
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,6 +34,17 @@ router = APIRouter()
 async def health() -> JSONResponse:
     return JSONResponse(
         {"status": "ok", "upstream": settings.llm_base_url}
+    )
+
+
+@router.get("/metrics")
+async def metrics(request: Request) -> Response:
+    accept = request.headers.get("accept", "")
+    if "application/json" in accept:
+        return JSONResponse(telemetry.snapshot())
+    return Response(
+        telemetry.render_prometheus(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
     )
 
 

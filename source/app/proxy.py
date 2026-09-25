@@ -23,6 +23,7 @@ from app.remediation.base import RetryPolicy, StreamVerdict
 from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.stall import StallDetector
+from app.telemetry import telemetry
 
 logger = logging.getLogger("bandaid.proxy")
 
@@ -308,6 +309,7 @@ class Proxy:
         final_status: int
         final_headers: dict
         final_body: bytes
+        outcome = "unknown"
 
         for attempt in range(1, policy.max_attempts + 1):
             started = time.time()
@@ -365,9 +367,18 @@ class Proxy:
                 }
             )
 
+            telemetry.incr("attempts_total")
+            telemetry.observe_latency(time.time() - started)
+            if error is not None:
+                telemetry.incr("upstream_errors_total", {"type": error["type"]})
+                telemetry.set_upstream_down(True)
+            elif status is not None:
+                telemetry.set_upstream_down(False)
+
             # Action: retry with backoff, or settle on the final outcome.
             if policy.should_retry(diagnosis, attempt):
                 delay = policy.backoff.delay(attempt)
+                telemetry.incr("retries_total")
                 logger.warning(
                     "retrying in %.2fs (attempt %d/%d)",
                     delay,
@@ -381,10 +392,13 @@ class Proxy:
                 final_status = 502
                 final_headers = {"content-type": "application/json"}
                 final_body = b'{"error": "upstream failure"}'
+                outcome = "upstream_failure"
             else:
                 final_status = status
                 final_headers = resp_headers
                 final_body = resp_body
+                outcome = "success" if status < 400 else "http_error"
+            telemetry.incr("requests_total", {"outcome": outcome})
             break
 
         content_type = final_headers.get("content-type")
@@ -558,6 +572,14 @@ class Proxy:
                     diagnosis,
                 )
 
+            telemetry.incr("attempts_total")
+            telemetry.observe_latency(time.time() - started)
+            if error is not None:
+                telemetry.incr("upstream_errors_total", {"type": error["type"]})
+                telemetry.set_upstream_down(True)
+            elif status is not None:
+                telemetry.set_upstream_down(False)
+
             # Content verdict (loop or stalled) -> terminal; never retry.
             # Retrying just re-enters the loop, or re-waits for a silent model.
             if loop_verdict is not None:
@@ -574,6 +596,14 @@ class Proxy:
                         "duration": time.time() - started,
                     }
                 )
+                if loop_verdict.kind == "loop":
+                    telemetry.incr("requests_total", {"outcome": "loop_aborted"})
+                    telemetry.incr(
+                        "loop_aborts_total", {"stream": loop_stream or "unknown"}
+                    )
+                else:
+                    telemetry.incr("requests_total", {"outcome": "stalled"})
+                    telemetry.incr("stall_aborts_total")
                 logger.error(
                     "%s DETECTED request_id=%s stream=%s reason=%s",
                     loop_verdict.kind.upper(),
@@ -599,6 +629,7 @@ class Proxy:
                 )
                 if policy.should_retry(diagnosis, attempt):
                     delay = policy.backoff.delay(attempt)
+                    telemetry.incr("retries_total")
                     logger.warning(
                         "retrying in %.2fs (attempt %d/%d)",
                         delay,
@@ -607,6 +638,7 @@ class Proxy:
                     )
                     await asyncio.sleep(delay)
                     continue
+                telemetry.incr("requests_total", {"outcome": "upstream_failure"})
                 return Response(
                     content=b'{"error": "upstream failure"}',
                     status_code=502,
@@ -629,6 +661,7 @@ class Proxy:
                 )
                 if policy.should_retry(diagnosis, attempt):
                     delay = policy.backoff.delay(attempt)
+                    telemetry.incr("retries_total")
                     logger.warning(
                         "retrying in %.2fs (attempt %d/%d)",
                         delay,
@@ -637,6 +670,7 @@ class Proxy:
                     )
                     await asyncio.sleep(delay)
                     continue
+                telemetry.incr("requests_total", {"outcome": "http_error"})
                 out_headers, ctype = _filtered_headers(resp_headers)
                 return Response(
                     content=error_body,
@@ -666,6 +700,7 @@ class Proxy:
                     "duration": time.time() - started,
                 }
             )
+            telemetry.incr("requests_total", {"outcome": "success"})
             if client_wants_stream:
                 lines = list(sse_lines)
                 # Guarantee a clean SSE termination even if the upstream

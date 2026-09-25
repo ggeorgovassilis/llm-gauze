@@ -5,6 +5,7 @@ remediation modules will read from. It is deliberately kept simple and
 append-only: each exchange is written as one JSON line to a JSONL file.
 """
 
+import datetime
 import json
 import logging
 import threading
@@ -16,12 +17,36 @@ logger = logging.getLogger("bandaid.recorder")
 
 
 class Recorder:
-    """Append-only recorder writing JSONL records to disk."""
+    """Append-only recorder writing JSONL records to disk.
+
+    Each run starts a fresh record file: if one already exists at the target
+    path it is first rotated aside (timestamp appended to its name) so a
+    restart never appends to — or overwrites — the previous run's data.
+    """
 
     def __init__(self, record_path: str | Path) -> None:
         self.path = Path(record_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._rotate_existing()
         self._lock = threading.Lock()
+
+    def _rotate_existing(self) -> None:
+        """Move a pre-existing record file aside, appending a timestamp."""
+        if not self.path.exists():
+            return
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        rotated = self.path.with_name(f"{self.path.stem}-{stamp}{self.path.suffix}")
+        # Collision (same second) is vanishingly unlikely, but avoid clobbering.
+        counter = 1
+        while rotated.exists():
+            rotated = self.path.with_name(
+                f"{self.path.stem}-{stamp}-{counter}{self.path.suffix}"
+            )
+            counter += 1
+        self.path.rename(rotated)
+        logger.info(
+            "rotated existing record file %s -> %s", self.path.name, rotated.name
+        )
 
     def record(self, entry: dict) -> None:
         """Persist a single exchange record.

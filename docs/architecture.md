@@ -47,9 +47,12 @@ failure ──▶ Detector (understanding) ──▶ Diagnosis ──▶ Backoff
 ```
 
 - `app/remediation/base.py` — abstract `Detector`, `Backoff`, `Diagnosis`,
-  `RetryPolicy`.
+  `RetryPolicy`, plus `StreamDetector`/`StreamVerdict` for content streams.
 - `app/remediation/retry.py` — `RetryableDetector` (transient exceptions +
   retryable HTTP statuses) and `ExponentialBackoff` (with optional jitter).
+- `app/remediation/loop.py` — `ThinkingLoopDetector`, a stateful
+  `StreamDetector` that flags repetitive output via n-gram recurrence and low
+  compression entropy.
 
 `RetryableDetector` classifies transport-level failures **by category**
 (`httpx.RequestError`, `OSError`, `TimeoutError`) rather than enumerating every
@@ -57,8 +60,36 @@ possible exception, so any network/timeout error is retryable. Retryable HTTP
 statuses are configurable. Non-transient exceptions (bugs in our own code) are
 deliberately left unretryable so they surface instead of being masked.
 
-Future capabilities (sloppy-response cleanup, loop detection, context-window
-detection, ...) implement these interfaces rather than editing the proxy.
+Future capabilities (sloppy-response cleanup, context-window detection, ...)
+implement these interfaces rather than editing the proxy.
+
+## Loop detection
+
+Reasoning models sometimes get stuck regenerating the same or near-identical
+sentences. Loop detection is a **content** signal (unlike retry, which handles
+transport/status failures), so the gateway observes output as it is generated:
+
+- Chat completions are requested from upstream with `stream: true` so the
+  output can be read incrementally, then reassembled into a non-streaming
+  `chat.completion` for the client.
+- Two independent `ThinkingLoopDetector` instances run — one over the thinking
+  (reasoning) stream, one over the visible response. The windows are **never
+  combined**: repeating thinking content inside the response is not a loop.
+- Scope is a **single response**; a later response repeating an earlier one is
+  not a loop.
+- Each detector is stateful and created fresh per request (with `reset()`),
+  never shared across concurrent requests.
+- On detection the gateway logs it prominently, records a `loop_detected`
+  diagnosis, aborts the upstream request (no retry — retrying just re-enters
+  the loop), and returns a `loop_abort_status` error to the client.
+
+Detection uses two independent signals, both configurable via `.env`:
+
+1. **n-gram recurrence** — Jaccard similarity of word n-grams against a sliding
+   window of recent sentences (`LOOP_*` settings).
+2. **low compression entropy** — zlib compression ratio of the window text,
+   gated by a minimum window length.
+
 
 ## Timeout model
 

@@ -11,7 +11,15 @@ Later phases (sloppy-response cleanup, loop detection, context-window
 detection, ...) implement these interfaces rather than editing the proxy.
 """
 
-from app.remediation.base import Backoff, Detector, Diagnosis, RetryPolicy
+from app.remediation.base import (
+    Backoff,
+    Detector,
+    Diagnosis,
+    RetryPolicy,
+    StreamDetector,
+    StreamVerdict,
+)
+from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 
 __all__ = [
@@ -19,6 +27,9 @@ __all__ = [
     "Detector",
     "Diagnosis",
     "RetryPolicy",
+    "StreamDetector",
+    "StreamVerdict",
     "ExponentialBackoff",
     "RetryableDetector",
+    "ThinkingLoopDetector",
 ]

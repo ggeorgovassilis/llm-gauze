@@ -12,7 +12,7 @@ the proxy directly.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -59,3 +59,38 @@ class RetryPolicy:
 
     def should_retry(self, diagnosis: Diagnosis, attempt: int) -> bool:
         return diagnosis.retryable and attempt < self.max_attempts
+
+
+@dataclass
+class StreamVerdict:
+    """The understanding layer's verdict about a content stream.
+
+    ``kind`` describes what was detected (e.g. ``"loop"``); ``reason`` is a
+    human-readable explanation and ``details`` carries machine-readable extras.
+    """
+
+    kind: str
+    reason: str | None = None
+    details: dict = field(default_factory=dict)
+
+
+class StreamDetector(ABC):
+    """Understanding layer for content streams (thinking or response).
+
+    Sibling of ``Detector``: where ``Detector`` classifies transport/status
+    failures, a ``StreamDetector`` observes the generated text itself (loops,
+    drift, context overflow, ...). Stateful by design — one instance per
+    (request, stream), never shared across requests.
+    """
+
+    @abstractmethod
+    def feed(self, text: str) -> StreamVerdict | None:
+        """Feed a chunk of generated text; return a verdict iff detected."""
+
+    @abstractmethod
+    def flush(self) -> StreamVerdict | None:
+        """Process any trailing partial text at end of stream."""
+
+    @abstractmethod
+    def reset(self) -> None:
+        """Clear all accumulated state."""

@@ -48,6 +48,18 @@ Retries (transient upstream failures are retried with exponential backoff):
 - `RETRY_BACKOFF_JITTER` — apply full jitter to the computed delay.
 - `RETRYABLE_STATUS_CODES` — comma-separated HTTP statuses that warrant a retry.
 
+Loop detection (chat completions are streamed from upstream and observed for
+repetitive output; a loop aborts the request with a `loop_detected` error):
+
+- `LOOP_DETECTION_ENABLED` — master switch for loop detection.
+- `LOOP_WINDOW_SENTENCES` — recent sentences compared against.
+- `LOOP_JACCARD_THRESHOLD` — similarity threshold for "same sentence".
+- `LOOP_MIN_LOOP_COUNT` — similar sentences in the window that constitute a loop.
+- `LOOP_NGRAM_SIZE` — word n-gram size used for similarity.
+- `LOOP_COMPRESSION_RATIO` — compression ratio below which output is low-entropy.
+- `LOOP_COMPRESSION_MIN_CHARS` — min window length before the compression check.
+- `LOOP_ABORT_STATUS` — HTTP status returned when a loop is detected.
+
 Recording:
 
 - `DATA_DIR` / `RECORD_FILE` — where exchanges are recorded (JSONL).
@@ -65,6 +77,6 @@ phases to come.
 - ~~Retries on transient errors.~~
 - Error detection & remediation pipeline (modular, pluggable).
 - Sloppy-response cleanup (`<think>` tags, malformed tool calls).
-- Stuck/loop detection.
+- ~~Stuck/loop detection.~~
 - Context-window detection.
 - Streaming pass-through.

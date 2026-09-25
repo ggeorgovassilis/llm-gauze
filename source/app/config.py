@@ -49,5 +49,30 @@ class Settings(BaseSettings):
     # Comma-separated HTTP status codes that warrant a retry.
     retryable_status_codes: str = "408,429,500,502,503,504"
 
+    # --- Loop detection (thinking/output loops) ----------------------
+    # Master switch for the loop-detection feature.
+    loop_detection_enabled: bool = True
+
+    # Sliding window size (recent sentences compared against).
+    loop_window_sentences: int = 20
+
+    # Jaccard similarity above which two sentences count as "the same".
+    loop_jaccard_threshold: float = 0.65
+
+    # Number of similar sentences within the window that constitutes a loop.
+    loop_min_loop_count: int = 3
+
+    # Word n-gram size used for similarity.
+    loop_ngram_size: int = 3
+
+    # Compression ratio below which the window is considered low-entropy.
+    loop_compression_ratio: float = 0.22
+
+    # Minimum window length (chars) before the compression check applies.
+    loop_compression_min_chars: int = 300
+
+    # HTTP status returned to the client when a loop is detected.
+    loop_abort_status: int = 502
+
 
 settings = Settings()

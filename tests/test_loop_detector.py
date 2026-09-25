@@ -129,6 +129,28 @@ def test_compression_triggers_loop():
     assert "entropy" in verdict.reason, verdict
 
 
+def test_structured_output_does_not_loop():
+    # Regression: a report rendering similarly-formatted rows (prices, region
+    # codes, product names) used to trip the loop detector because the sentence
+    # splitter produced fragments like "eu." and "1." whose single token matched
+    # every other identical fragment. Structured output must not be mistaken for
+    # a repetition loop.
+    #
+    # `_make()` is *stricter* than production (min_loop_count=2, jaccard=0.6 vs
+    # production 3 / 0.65), so passing here guarantees no false positive live.
+    detector = _make()
+    rows = [
+        "1. NVIDIA Quadro GV100 (max 691.2): best candidate 6.eu.0 at 342.7 EUR.",
+        "2. NVIDIA Quadro RTX 4000 (max 225.0): best candidate 3.eu.0 at 153.77 EUR.",
+        "3. NVIDIA Tesla V100 PCIe 32GB (max 711.0): best candidate 1.eu.0 at 596.66 EUR.",
+        "4. NVIDIA RTX A4000 (max 776.0): best candidate 5.eu.0 at 153.77 EUR.",
+        "5. NVIDIA Tesla T4 (max 610.0): best candidate 10.eu.1 at 558.04 EUR.",
+    ]
+    for row in rows:
+        assert detector.feed(row + "\n") is None, row
+    assert detector.flush() is None
+
+
 def _run_all() -> int:
     tests = [
         value

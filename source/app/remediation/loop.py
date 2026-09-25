@@ -13,7 +13,10 @@ It fixes the issues identified in the original draft:
   (request, stream), never shared across requests;
 * treats n-gram recurrence and low compression as **two independent** signals;
 * returns a structured ``StreamVerdict`` instead of raw dicts;
-* accumulates partial chunks and splits them into sentences internally.
+* accumulates partial chunks and splits them into sentences internally;
+* ignores fragments shorter than the n-gram size, so trivial repeats (list
+  markers, region codes, lone digits) can't trip the recurrence signal on
+  structured output such as lists, tables or prices.
 
 Only the standard library is used, so the detector is pure and unit-testable
 without the gateway.
@@ -109,6 +112,16 @@ class ThinkingLoopDetector(StreamDetector):
         if not clean:
             return None
 
+        # Fragments shorter than the n-gram size cannot form a real n-gram, so
+        # they carry no repetition signal. Skipping them stops trivial repeats
+        # — list markers ("1."), region codes ("eu."), lone digits — from
+        # collapsing to an identical one-element set and over-matching, which
+        # previously tripped the loop on legitimate structured output (lists,
+        # tables, prices). A genuine loop repeats substantial sentences, never
+        # single tokens.
+        if len(_WORD.findall(clean.lower())) < self.ngram_size:
+            return None
+
         ngrams = self._ngrams(clean)
 
         # Signal 1: high recurrence against the recent window.
@@ -145,10 +158,16 @@ class ThinkingLoopDetector(StreamDetector):
         return None
 
     def _ngrams(self, text: str) -> frozenset:
+        """Word n-grams of ``text``.
+
+        Callers must only pass text with at least ``ngram_size`` words (see
+        ``_observe_sentence``); shorter input yields an empty set so it can
+        never match anything.
+        """
         words = _WORD.findall(text.lower())
         n = self.ngram_size
         if len(words) < n:
-            return frozenset(words)
+            return frozenset()
         return frozenset(tuple(words[i : i + n]) for i in range(len(words) - n + 1))
 
     @staticmethod

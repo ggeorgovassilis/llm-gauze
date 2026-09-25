@@ -113,5 +113,23 @@ class Settings(BaseSettings):
     # recognised (413 Payload Too Large: the request cannot fit the model).
     context_window_abort_status: int = 413
 
+    # --- Think-tag cleanup -------------------------------------------
+    # Master switch for relocating leaked thinking tags out of the visible
+    # content and guaranteeing a non-empty response to the client.
+    think_cleanup_enabled: bool = True
+
+    # Comma-separated tag names (matched case-insensitively) whose inner text
+    # is relocated out of ``content`` into ``reasoning_content`` — e.g.
+    # ``<think>…</think>``, ``<reasoning>…</reasoning>``. Exact tag names only;
+    # no fuzzy heuristics.
+    think_tags: str = "think,thinking,reasoning"
+
+    # Placeholder message emitted as the visible ``content`` when the model
+    # produced only a thinking tag and nothing else. Kept short and explicit so
+    # the client receives a non-empty turn instead of aborting the flow.
+    think_empty_response_placeholder: str = (
+        "The model replied inside a thinking tag; see reasoning_content."
+    )
+
 
 settings = Settings()

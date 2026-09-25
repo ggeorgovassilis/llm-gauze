@@ -79,6 +79,16 @@ instead of being retried):
 - `CONTEXT_WINDOW_ABORT_STATUS` — HTTP status returned when an overflow is
   recognised (default 413).
 
+Think-tag cleanup (leaked `<think>`/`<reasoning>` tags are relocated out of the
+visible content into `reasoning_content` — never discarded — and a non-empty
+placeholder is emitted when the model produced only a thinking tag):
+
+- `THINK_CLEANUP_ENABLED` — master switch for think-tag cleanup.
+- `THINK_TAGS` — comma-separated tag names (case-insensitive) whose inner text
+  is relocated into `reasoning_content`.
+- `THINK_EMPTY_RESPONSE_PLACEHOLDER` — placeholder emitted as visible content
+  when the model produced only a thinking tag and nothing else.
+
 Recording:
 
 - `DATA_DIR` / `RECORD_FILE` — where exchanges are recorded (JSONL).
@@ -95,7 +105,8 @@ phases to come.
 
 - ~~Retries on transient errors.~~
 - Error detection & remediation pipeline (modular, pluggable).
-- Sloppy-response cleanup (`<think>` tags, malformed tool calls).
+- ~~Sloppy-response cleanup (`<think>` tags, malformed tool calls).~~ (think-tag
+  cleanup done; tool-call syntax enforcement tracked separately)
 - ~~Stuck/loop detection.~~
 - ~~Context-window detection.~~
 - Streaming pass-through.

@@ -1,0 +1,129 @@
+"""Think-tag cleanup — relocate leaked thinking tags out of visible content.
+
+Reasoning models occasionally emit their chain-of-thought as literal
+``<think>…</think>`` / ``<reasoning>…</reasoning>`` markup inside the *visible*
+``content`` field instead of the dedicated ``reasoning_content`` stream. The
+result is either a polluted visible message or — when the model emits only the
+tag and nothing else — an empty visible turn, which aborts Copilot's agentic
+flow and strips the agent of any ability to remediate.
+
+This guard runs on the fully-assembled completion (after streaming
+reconstruction) and:
+
+* **relocates** the inner text of any leaked thinking tag out of ``content``
+  and appends it to ``reasoning`` — nothing is discarded;
+* when the visible ``content`` is empty/whitespace but reasoning exists, emits
+  a short configurable placeholder so the client still receives a non-empty
+  response;
+* reports exactly what it changed so the recorder can log it (no silent
+  mutation).
+
+Only the standard library is used, so the guard is pure and unit-testable
+without the gateway.
+"""
+
+import re
+
+from app.config import settings
+
+_DEFAULT_TAGS = ("think", "thinking", "reasoning")
+
+
+class ThinkContentGuard:
+    """Relocate leaked thinking tags and guarantee a non-empty visible reply.
+
+    ``clean(content, reasoning)`` returns ``(content, reasoning, changes)``:
+    the possibly-rewritten visible content and reasoning streams, plus a list
+    of change records for the recorder.
+    """
+
+    def __init__(
+        self,
+        tags: tuple[str, ...] | None = None,
+        placeholder: str | None = None,
+    ) -> None:
+        self.tags = tuple(t.lower() for t in (tags or _DEFAULT_TAGS))
+        self.placeholder = (
+            placeholder if placeholder is not None
+            else settings.think_empty_response_placeholder
+        )
+
+    @classmethod
+    def from_settings(cls) -> "ThinkContentGuard":
+        tags = tuple(
+            s.strip()
+            for s in settings.think_tags.split(",")
+            if s.strip()
+        )
+        return cls(tags or _DEFAULT_TAGS, settings.think_empty_response_placeholder)
+
+    # --- public API --------------------------------------------------
+
+    def clean(
+        self, content: str, reasoning: str = ""
+    ) -> tuple[str, str, list[dict]]:
+        """Rewrite ``content``/``reasoning``; return them plus change records."""
+        content = content or ""
+        reasoning = reasoning or ""
+        changes: list[dict] = []
+
+        content, reasoning, changes = self._relocate(content, reasoning, changes)
+        content, changes = self._guard_empty(content, reasoning, changes)
+        return content, reasoning, changes
+
+    # --- internals ---------------------------------------------------
+
+    def _complete_pattern(self) -> re.Pattern:
+        alternatives = "|".join(re.escape(t) for t in self.tags)
+        # <tag>inner</tag> — DOTALL lets inner text span newlines; IGNORECASE
+        # catches case variants. Non-greedy so the first closing tag wins.
+        return re.compile(
+            rf"<({alternatives})>(.*?)</\1>", re.IGNORECASE | re.DOTALL
+        )
+
+    def _unmatched_pattern(self) -> re.Pattern:
+        alternatives = "|".join(re.escape(t) for t in self.tags)
+        # A trailing opening tag with no matching close: "<think>truncated…".
+        return re.compile(
+            rf"<({alternatives})>(.*)$", re.IGNORECASE | re.DOTALL
+        )
+
+    def _relocate(
+        self, content: str, reasoning: str, changes: list[dict]
+    ) -> tuple[str, str, list[dict]]:
+        """Move the inner text of leaked thinking tags into ``reasoning``."""
+        inner_parts: list[str] = []
+
+        def _replace(match: re.Match) -> str:
+            inner_parts.append(match.group(2))
+            return ""
+
+        content = self._complete_pattern().sub(_replace, content)
+
+        # A trailing unmatched opening tag means the model started a thinking
+        # block and never closed it — the rest of the text is reasoning.
+        unmatched = self._unmatched_pattern().search(content)
+        if unmatched is not None:
+            inner_parts.append(unmatched.group(2))
+            content = content[: unmatched.start()]
+
+        if inner_parts:
+            extra = "\n".join(part for part in inner_parts)
+            reasoning = f"{reasoning}\n{extra}" if reasoning else extra
+            changes.append(
+                {
+                    "kind": "relocated_think",
+                    "chars": sum(len(p) for p in inner_parts),
+                    "blocks": len(inner_parts),
+                }
+            )
+        return content, reasoning, changes
+
+    def _guard_empty(
+        self, content: str, reasoning: str, changes: list[dict]
+    ) -> tuple[str, list[dict]]:
+        """Guarantee non-empty visible content when reasoning was produced."""
+        if content.strip() == "" and reasoning.strip() != "":
+            changes.append({"kind": "empty_content_placeholder"})
+            return self.placeholder, changes
+        return content, changes

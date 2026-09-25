@@ -24,6 +24,7 @@ from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
 from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.stall import StallDetector
+from app.remediation.think import ThinkContentGuard
 from app.telemetry import telemetry
 
 logger = logging.getLogger("bandaid.proxy")
@@ -196,6 +197,48 @@ def _reconstruct_chat_completion(
     if meta.get("usage"):
         body["usage"] = meta["usage"]
     return body
+
+
+def _reconstruct_sse_lines(
+    meta: dict,
+    content: str,
+    reasoning: str,
+    tool_calls: list | None = None,
+) -> list[str]:
+    """Rebuild SSE ``data:`` lines from reconstructed (post-cleanup) values.
+
+    Used for a ``stream: true`` client when the think-tag guard changed the
+    output: the raw upstream lines still carry the leaked tags, so they cannot
+    be passed through verbatim. The reconstructed stream mirrors the same
+    cleaned values that the non-streaming client receives.
+    """
+    base = {
+        "id": meta.get("id") or uuid.uuid4().hex,
+        "object": "chat.completion.chunk",
+        "created": meta.get("created") or int(time.time()),
+        "model": meta.get("model") or "",
+    }
+    lines: list[str] = []
+
+    def _emit(delta: dict, finish_reason: str | None = None) -> None:
+        chunk = {
+            **base,
+            "choices": [
+                {"index": 0, "delta": delta, "finish_reason": finish_reason}
+            ],
+        }
+        lines.append("data: " + json.dumps(chunk))
+
+    _emit({"role": meta.get("role") or "assistant"})
+    if reasoning:
+        _emit({"reasoning_content": reasoning})
+    if content:
+        _emit({"content": content})
+    for index, call in enumerate(tool_calls or []):
+        _emit({"tool_calls": [{**call, "index": index}]})
+    _emit({}, finish_reason=meta.get("finish_reason") or "stop")
+    lines.append("data: [DONE]")
+    return lines
 
 
 def _filtered_headers(headers: dict) -> tuple[dict, str | None]:
@@ -737,9 +780,15 @@ class Proxy:
                     media_type=ctype,
                 )
 
-            # Success: reconstruct a non-streaming chat.completion for
-            # recording, and serve the client in its requested shape —
-            # SSE passthrough for streaming clients, plain JSON otherwise.
+            # Success: relocate leaked think tags and guarantee a non-empty
+            # visible reply before reconstructing.
+            cleanup_changes: list = []
+            if settings.think_cleanup_enabled:
+                guard = ThinkContentGuard.from_settings()
+                content, reasoning, cleanup_changes = guard.clean(
+                    content, reasoning
+                )
+
             final_body = json.dumps(
                 _reconstruct_chat_completion(
                     meta, content, reasoning, tool_calls
@@ -754,17 +803,25 @@ class Proxy:
                     "response_headers": resp_headers,
                     "response_body": _decode(final_body),
                     "streamed": client_wants_stream,
+                    "think_cleanup": cleanup_changes or None,
                     "diagnosis": None,
                     "duration": time.time() - started,
                 }
             )
             telemetry.incr("requests_total", {"outcome": "success"})
             if client_wants_stream:
-                lines = list(sse_lines)
-                # Guarantee a clean SSE termination even if the upstream
-                # omits the ``[DONE]`` sentinel (some providers do).
-                if not lines or lines[-1].strip() != "data: [DONE]":
-                    lines.append("data: [DONE]")
+                if cleanup_changes:
+                    # The raw SSE lines still carry the leaked tags; rebuild
+                    # the stream from the cleaned values instead.
+                    lines = _reconstruct_sse_lines(
+                        meta, content, reasoning, tool_calls
+                    )
+                else:
+                    lines = list(sse_lines)
+                    # Guarantee a clean SSE termination even if the upstream
+                    # omits the ``[DONE]`` sentinel (some providers do).
+                    if not lines or lines[-1].strip() != "data: [DONE]":
+                        lines.append("data: [DONE]")
                 sse_body = "".join(
                     f"{line}\n\n" for line in lines
                 ).encode("utf-8")

@@ -23,6 +23,7 @@ from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
 from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.stall import StallDetector
+from app.remediation.think import ThinkContentGuard
 
 __all__ = [
     "Backoff",
@@ -37,4 +38,5 @@ __all__ = [
     "StallDetector",
     "ContextWindowDetector",
     "CONTEXT_WINDOW_CODE",
+    "ThinkContentGuard",
 ]

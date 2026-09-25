@@ -57,6 +57,9 @@ failure ──▶ Detector (understanding) ──▶ Diagnosis ──▶ Backoff
   flags a stream which has stopped producing content tokens (silent hang).
 - `app/remediation/context.py` — `ContextWindowDetector`, which recognises the
   upstream's context-window-fill error and reclassifies it non-retryable.
+- `app/remediation/think.py` — `ThinkContentGuard`, a *transform* (not a
+  `Detector`) that relocates leaked thinking tags out of visible content and
+  guarantees a non-empty reply.
 
 `RetryableDetector` classifies transport-level failures **by category**
 (`httpx.RequestError`, `OSError`, `TimeoutError`) rather than enumerating every
@@ -144,6 +147,39 @@ the retry decision:
 - The detector inspects both the buffered forward path (response body) and the
   streaming path (error body / transport exception), so both request shapes
   fail fast on a full context window.
+
+
+## Think-tag cleanup
+
+Reasoning models occasionally emit their chain-of-thought as literal
+`<think>…</think>` / `<reasoning>…</reasoning>` markup inside the *visible*
+`content` field instead of the dedicated `reasoning_content` stream. Two
+problems follow: the visible message is polluted, and — when the model emits
+only the tag and nothing else — the visible turn is empty, which aborts
+Copilot's agentic flow.
+
+Think-tag cleanup is therefore a **content transform** (not a failure
+`Detector`): it rewrites the assembled completion rather than classifying it.
+
+- `ThinkContentGuard.clean(content, reasoning)` **relocates** the inner text of
+  any leaked thinking tag out of `content` and appends it to `reasoning` —
+  nothing is discarded. Tag names are configurable (`THINK_TAGS`) and matched
+  case-insensitively by exact tag name — no fuzzy heuristics.
+- A trailing unmatched opening tag (`<think>…` with no close) is treated the
+  same way: the remainder is reasoning.
+- If the visible `content` is empty/whitespace after relocation but reasoning
+  exists, a short configurable placeholder (`THINK_EMPTY_RESPONSE_PLACEHOLDER`)
+  is emitted instead of an empty turn.
+- Every change is reported back to the recorder as a `think_cleanup` list of
+  `{kind, …}` records (`relocated_think`, `empty_content_placeholder`), so the
+  mutation is never silent.
+- It runs after streaming reconstruction, before the response is rebuilt. For a
+  `stream: true` client whose output was changed, the SSE stream is rebuilt
+  from the cleaned values; untouched streams are passed through verbatim.
+
+Extracting a *usable answer* from the relocated chain-of-thought is deliberately
+out of scope here (see #13): it is not deterministically fixable, and surfacing
+raw reasoning as content would be a quality regression.
 
 
 ## Timeout model

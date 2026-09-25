@@ -786,7 +786,7 @@ class Proxy:
             if settings.think_cleanup_enabled:
                 guard = ThinkContentGuard.from_settings()
                 content, reasoning, cleanup_changes = guard.clean(
-                    content, reasoning
+                    content, reasoning, tool_calls
                 )
 
             final_body = json.dumps(

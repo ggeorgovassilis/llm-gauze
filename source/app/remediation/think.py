@@ -60,15 +60,24 @@ class ThinkContentGuard:
     # --- public API --------------------------------------------------
 
     def clean(
-        self, content: str, reasoning: str = ""
+        self,
+        content: str,
+        reasoning: str = "",
+        tool_calls: list | None = None,
     ) -> tuple[str, str, list[dict]]:
-        """Rewrite ``content``/``reasoning``; return them plus change records."""
+        """Rewrite ``content``/``reasoning``; return them plus change records.
+
+        ``tool_calls`` is the assembled tool-call list (or ``None``). A turn
+        that carries tool calls has *legitimately* empty visible content — the
+        model is invoking a tool, not answering in prose — so the placeholder
+        is never emitted for it.
+        """
         content = content or ""
         reasoning = reasoning or ""
         changes: list[dict] = []
 
         content, reasoning, changes = self._relocate(content, reasoning, changes)
-        content, changes = self._guard_empty(content, reasoning, changes)
+        content, changes = self._guard_empty(content, reasoning, tool_calls, changes)
         return content, reasoning, changes
 
     # --- internals ---------------------------------------------------
@@ -120,10 +129,22 @@ class ThinkContentGuard:
         return content, reasoning, changes
 
     def _guard_empty(
-        self, content: str, reasoning: str, changes: list[dict]
+        self,
+        content: str,
+        reasoning: str,
+        tool_calls: list | None,
+        changes: list[dict],
     ) -> tuple[str, list[dict]]:
-        """Guarantee non-empty visible content when reasoning was produced."""
-        if content.strip() == "" and reasoning.strip() != "":
+        """Guarantee non-empty visible content when reasoning was produced.
+
+        A tool-call turn has empty content by design, so it is exempt: the
+        model answered with a tool invocation, not prose.
+        """
+        if (
+            content.strip() == ""
+            and reasoning.strip() != ""
+            and not tool_calls
+        ):
             changes.append({"kind": "empty_content_placeholder"})
             return self.placeholder, changes
         return content, changes

@@ -115,6 +115,42 @@ def test_think_only_emits_placeholder_not_empty():
     assert kinds == {"relocated_think", "empty_content_placeholder"}, changes
 
 
+def test_tool_call_turn_is_not_replaced():
+    # A tool-call turn has legitimately empty visible content; the model is
+    # invoking a tool, not answering in prose. The placeholder must NOT fire.
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        }
+    ]
+    content, reasoning, changes = _guard().clean(
+        "", "which tool should I call?", tool_calls
+    )
+    assert content == "", repr(content)
+    assert reasoning == "which tool should I call?", repr(reasoning)
+    assert changes == [], changes
+
+
+def test_tool_call_turn_still_relocates_leaked_tag():
+    # Even on a tool-call turn, a leaked think tag in content is relocated;
+    # but no placeholder is added because the tool call fills the turn.
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": "{}"},
+        }
+    ]
+    content, reasoning, changes = _guard().clean(
+        "<think>which tool</think>", "", tool_calls
+    )
+    assert content == "", repr(content)
+    assert reasoning == "which tool", repr(reasoning)
+    assert changes == [{"kind": "relocated_think", "chars": 10, "blocks": 1}], changes
+
+
 # --- integration harness ---------------------------------------------
 
 
@@ -243,6 +279,39 @@ def test_streaming_no_change_passthrough():
     text = resp.body.decode("utf-8")
     assert "plain answer" in text, text
     assert "chat.completion.chunk" in text, text
+
+
+def test_reconstructed_tool_call_turn_no_placeholder():
+    """A tool-call turn must keep empty content — no placeholder injected."""
+    chunks = [
+        _chunk({"role": "assistant", "reasoning_content": "which tool?"}),
+        _chunk(
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": ""},
+                    }
+                ]
+            }
+        ),
+        _chunk(
+            {"tool_calls": [{"index": 0, "function": {"arguments": '{"city":'}}]}
+        ),
+        _chunk(
+            {"tool_calls": [{"index": 0, "function": {"arguments": '"Paris"}'}}]}
+        ),
+        _chunk({}, finish_reason="tool_calls"),
+    ]
+    resp = _run_forward(chunks, stream=False)
+    assert resp.status_code == 200, (resp.status_code, resp.body)
+    data = json.loads(resp.body)
+    message = data["choices"][0]["message"]
+    assert "content" not in message, message
+    assert message["reasoning_content"] == "which tool?", message
+    assert message["tool_calls"][0]["function"]["arguments"] == '{"city":"Paris"}', message
 
 
 def _run_all() -> int:

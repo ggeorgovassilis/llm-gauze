@@ -89,6 +89,14 @@ placeholder is emitted when the model produced only a thinking tag):
 - `THINK_EMPTY_RESPONSE_PLACEHOLDER` — placeholder emitted as visible content
   when the model produced only a thinking tag and nothing else.
 
+Nudge (a turn that produced only reasoning — `finish_reason: stop`, no content,
+no tool calls — is re-submitted once with a short re-prompt so the model gets a
+second chance to emit a real answer, before falling back to the placeholder):
+
+- `THINK_NUDGE_ENABLED` — master switch for the nudge.
+- `THINK_NUDGE_TEXT` — nudge text appended as a `user` message.
+- `THINK_NUDGE_MAX_ATTEMPTS` — max re-submissions before the placeholder floor.
+
 Recording:
 
 - `DATA_DIR` / `RECORD_FILE` — where exchanges are recorded (JSONL).

@@ -24,6 +24,8 @@ _DEFAULT_MARKERS = (
     "prompt is longer than the context",
     "input is too long",
     "ran out of context",
+    # LiteLLM's own phrasing when it wraps the underlying provider's error.
+    "exceeds the available context size",
 )
 
 CONTEXT_WINDOW_CODE = "context_window_exceeded"

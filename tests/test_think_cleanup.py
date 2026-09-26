@@ -151,6 +151,22 @@ def test_tool_call_turn_still_relocates_leaked_tag():
     assert changes == [{"kind": "relocated_think", "chars": 10, "blocks": 1}], changes
 
 
+def test_relocate_does_not_apply_placeholder():
+    # The nudge rung needs the relocated turn *before* the placeholder floor,
+    # so `relocate` must leave empty content empty.
+    content, reasoning, changes = _guard().relocate("<think>x</think>")
+    assert content == "", repr(content)
+    assert reasoning == "x", repr(reasoning)
+    assert changes == [{"kind": "relocated_think", "chars": 1, "blocks": 1}], changes
+
+
+def test_guard_empty_apply_placeholder():
+    # `guard_empty` is the standalone placeholder floor.
+    content, changes = _guard().guard_empty("", "some reasoning")
+    assert content == _PLACEHOLDER, repr(content)
+    assert changes == [{"kind": "empty_content_placeholder"}], changes
+
+
 # --- integration harness ---------------------------------------------
 
 

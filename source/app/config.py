@@ -106,7 +106,8 @@ class Settings(BaseSettings):
         "prompt is too long,"
         "prompt is longer than the context,"
         "input is too long,"
-        "ran out of context"
+        "ran out of context,"
+        "exceeds the available context size"
     )
 
     # HTTP status returned to the client when a context-window overflow is
@@ -130,6 +131,21 @@ class Settings(BaseSettings):
     think_empty_response_placeholder: str = (
         "The model replied inside a thinking tag; see reasoning_content."
     )
+
+    # --- Nudge (re-prompt empty-text turns) --------------------------
+    # Master switch for re-submitting a turn that produced only reasoning
+    # (finish_reason=stop, no content, no tool calls) with a short re-prompt.
+    think_nudge_enabled: bool = True
+
+    # Nudge text appended as a ``user`` message on the re-submitted request.
+    think_nudge_text: str = (
+        "Your previous reply contained no visible text and no tool call. "
+        "Reply with a visible answer, or call a tool if the task requires one."
+    )
+
+    # Maximum number of nudge re-submissions before falling back to the
+    # placeholder floor (see ``think_empty_response_placeholder``).
+    think_nudge_max_attempts: int = 2
 
 
 settings = Settings()

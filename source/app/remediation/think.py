@@ -76,9 +76,35 @@ class ThinkContentGuard:
         reasoning = reasoning or ""
         changes: list[dict] = []
 
-        content, reasoning, changes = self._relocate(content, reasoning, changes)
-        content, changes = self._guard_empty(content, reasoning, tool_calls, changes)
+        content, reasoning, changes = self.relocate(content, reasoning)
+        content, guard_changes = self.guard_empty(content, reasoning, tool_calls)
+        changes.extend(guard_changes)
         return content, reasoning, changes
+
+    def relocate(
+        self, content: str, reasoning: str = ""
+    ) -> tuple[str, str, list[dict]]:
+        """Relocate leaked thinking tags only (no placeholder applied).
+
+        The nudge rung inspects the relocated turn to decide whether to
+        re-submit; the placeholder floor is applied separately afterwards.
+        """
+        content = content or ""
+        reasoning = reasoning or ""
+        changes: list[dict] = []
+        return self._relocate(content, reasoning, changes)
+
+    def guard_empty(
+        self,
+        content: str,
+        reasoning: str = "",
+        tool_calls: list | None = None,
+    ) -> tuple[str, list[dict]]:
+        """Apply the placeholder floor to an empty visible turn."""
+        content = content or ""
+        reasoning = reasoning or ""
+        changes: list[dict] = []
+        return self._guard_empty(content, reasoning, tool_calls, changes)
 
     # --- internals ---------------------------------------------------
 

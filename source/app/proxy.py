@@ -12,6 +12,7 @@ import logging
 import time
 import traceback
 import uuid
+from dataclasses import dataclass, field
 
 import httpx
 from fastapi import Request
@@ -22,6 +23,7 @@ from app.recorder import Recorder
 from app.remediation.base import RetryPolicy, StreamVerdict
 from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
 from app.remediation.loop import ThinkingLoopDetector
+from app.remediation.nudge import NudgePolicy
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.stall import StallDetector
 from app.remediation.think import ThinkContentGuard
@@ -44,6 +46,32 @@ HOP_BY_HOP_HEADERS = {
 
 # Headers we manage ourselves on the outbound response.
 _OWNED_RESPONSE_HEADERS = {"content-length", "content-type"}
+
+
+@dataclass
+class _StreamResult:
+    """Outcome of one streamed exchange with the upstream.
+
+    Either ``response`` is set (a terminal outcome: loop/stall abort,
+    context-window overflow, transport failure, or HTTP error) or the success
+    fields carry the assembled turn for the caller to finalise (nudge, then
+    the placeholder floor, then reconstruct).
+    """
+
+    response: Response | None = None
+    content: str = ""
+    reasoning: str = ""
+    tool_calls: list = field(default_factory=list)
+    meta: dict = field(default_factory=dict)
+    sse_lines: list = field(default_factory=list)
+    finish_reason: str = "stop"
+    relocate_changes: list = field(default_factory=list)
+    # Recording scaffolding for the success path.
+    status: int | None = None
+    resp_headers: dict = field(default_factory=dict)
+    attempt: int = 1
+    max_attempts: int = 1
+    duration: float = 0.0
 
 
 def _decode(data: bytes) -> str | None:
@@ -505,15 +533,19 @@ class Proxy:
         headers: dict,
         base_entry: dict,
     ) -> Response:
-        """Stream the upstream response and abort on a thinking/output loop.
+        """Stream the upstream response; nudge an empty-text turn to retry.
 
         The upstream is asked for ``stream: true`` so the output can be
         observed incrementally. Two independent detectors run — one over the
         thinking (reasoning) stream, one over the visible response — and a
         loop in either aborts the request (never retried: retrying just
         re-enters the loop).
+
+        On a successful but empty turn (``finish_reason`` stop, no content, no
+        tool calls, non-empty reasoning), the request is re-submitted with a
+        short nudge re-prompt, up to a small budget; when that budget is
+        exhausted the placeholder floor (think cleanup) is applied.
         """
-        stream_body, content_type = _ensure_stream(body)
         # `_ensure_stream` rewrites the body (stream forced on, JSON
         # re-serialised), so any inbound Content-Length is stale. Drop it and
         # let httpx recompute it from the actual body; forwarding the stale
@@ -521,6 +553,7 @@ class Proxy:
         out_headers = {
             k: v for k, v in headers.items() if k.lower() != "content-length"
         }
+        content_type = _ensure_stream(body)[1]
         if content_type:
             out_headers["content-type"] = content_type
 
@@ -528,6 +561,83 @@ class Proxy:
         # client gets the reconstructed chat.completion. See `_client_wants_stream`.
         client_wants_stream = _client_wants_stream(body)
 
+        nudge = (
+            NudgePolicy.from_settings()
+            if settings.think_nudge_enabled
+            else None
+        )
+        guard = (
+            ThinkContentGuard.from_settings()
+            if settings.think_cleanup_enabled
+            else None
+        )
+
+        current_body = body
+        nudge_attempt = 0
+        while True:
+            stream_body, _ = _ensure_stream(current_body)
+            result = await self._stream_once(
+                request_id,
+                method,
+                url,
+                query,
+                stream_body,
+                out_headers,
+                base_entry,
+            )
+            if result.response is not None:
+                return result.response
+
+            empty_turn = bool(
+                nudge is not None
+                and nudge.should_nudge(
+                    result.finish_reason,
+                    result.content,
+                    result.tool_calls,
+                    result.reasoning,
+                )
+            )
+            if empty_turn and nudge_attempt < nudge.max_attempts:
+                self._record_nudge_pass(
+                    base_entry, result, client_wants_stream, nudge_attempt
+                )
+                nudge_attempt += 1
+                current_body = json.dumps(
+                    nudge.apply(json.loads(current_body))
+                ).encode("utf-8")
+                continue
+
+            nudge_outcome = None
+            if empty_turn:
+                nudge_outcome = "exhausted"
+            elif nudge_attempt > 0:
+                nudge_outcome = "succeeded"
+            return self._finalize_success(
+                base_entry,
+                result,
+                guard,
+                client_wants_stream,
+                nudge_attempt,
+                nudge_outcome,
+            )
+
+    async def _stream_once(
+        self,
+        request_id: str,
+        method: str,
+        url: str,
+        query: str,
+        stream_body: bytes,
+        out_headers: dict,
+        base_entry: dict,
+    ) -> _StreamResult:
+        """One retrying streamed exchange against the upstream.
+
+        Transport/HTTP failures are retried here (with backoff), exactly as the
+        buffered path does; a loop/stall/context-window verdict is terminal.
+        On success the assembled turn is returned for the caller to finalise —
+        no record is written here for the success case.
+        """
         policy = self.retry_policy
         for attempt in range(1, policy.max_attempts + 1):
             started = time.time()
@@ -690,7 +800,9 @@ class Proxy:
                     loop_stream,
                     loop_verdict.reason,
                 )
-                return _abort_error_response(loop_verdict)
+                return _StreamResult(
+                    response=_abort_error_response(loop_verdict)
+                )
 
             # Transport error -> retry or give up (mirrors the buffered path).
             if error is not None:
@@ -715,7 +827,9 @@ class Proxy:
                         {"outcome": "context_window_exceeded"},
                     )
                     telemetry.incr("context_window_aborts_total")
-                    return _context_window_error_response(status, diagnosis)
+                    return _StreamResult(
+                        response=_context_window_error_response(status, diagnosis)
+                    )
                 if policy.should_retry(diagnosis, attempt):
                     delay = policy.backoff.delay(attempt)
                     telemetry.incr("retries_total")
@@ -728,10 +842,12 @@ class Proxy:
                     await asyncio.sleep(delay)
                     continue
                 telemetry.incr("requests_total", {"outcome": "upstream_failure"})
-                return Response(
-                    content=b'{"error": "upstream failure"}',
-                    status_code=502,
-                    media_type="application/json",
+                return _StreamResult(
+                    response=Response(
+                        content=b'{"error": "upstream failure"}',
+                        status_code=502,
+                        media_type="application/json",
+                    )
                 )
 
             # HTTP error status -> retry or return it.
@@ -746,6 +862,7 @@ class Proxy:
                         "max_attempts": policy.max_attempts,
                         "status": status,
                         "response_headers": resp_headers,
+                        "response_body": _decode(error_body),
                         "diagnosis": _diagnosis_entry(diagnosis),
                         "duration": time.time() - started,
                     }
@@ -759,7 +876,9 @@ class Proxy:
                         {"outcome": "context_window_exceeded"},
                     )
                     telemetry.incr("context_window_aborts_total")
-                    return _context_window_error_response(status, diagnosis)
+                    return _StreamResult(
+                        response=_context_window_error_response(status, diagnosis)
+                    )
                 if policy.should_retry(diagnosis, attempt):
                     delay = policy.backoff.delay(attempt)
                     telemetry.incr("retries_total")
@@ -772,73 +891,145 @@ class Proxy:
                     await asyncio.sleep(delay)
                     continue
                 telemetry.incr("requests_total", {"outcome": "http_error"})
-                out_headers, ctype = _filtered_headers(resp_headers)
-                return Response(
-                    content=error_body,
-                    status_code=status,
-                    headers=out_headers,
-                    media_type=ctype,
+                err_headers, ctype = _filtered_headers(resp_headers)
+                return _StreamResult(
+                    response=Response(
+                        content=error_body,
+                        status_code=status,
+                        headers=err_headers,
+                        media_type=ctype,
+                    )
                 )
 
-            # Success: relocate leaked think tags and guarantee a non-empty
-            # visible reply before reconstructing.
-            cleanup_changes: list = []
+            # Success: relocate leaked think tags (the caller decides whether
+            # to nudge or apply the placeholder floor before reconstructing).
+            relocate_changes: list = []
             if settings.think_cleanup_enabled:
                 guard = ThinkContentGuard.from_settings()
-                content, reasoning, cleanup_changes = guard.clean(
-                    content, reasoning, tool_calls
+                content, reasoning, relocate_changes = guard.relocate(
+                    content, reasoning
                 )
 
-            final_body = json.dumps(
-                _reconstruct_chat_completion(
-                    meta, content, reasoning, tool_calls
-                )
-            ).encode("utf-8")
-            self.recorder.record(
-                {
-                    **base_entry,
-                    "attempt": attempt,
-                    "max_attempts": policy.max_attempts,
-                    "status": status,
-                    "response_headers": resp_headers,
-                    "response_body": _decode(final_body),
-                    "streamed": client_wants_stream,
-                    "think_cleanup": cleanup_changes or None,
-                    "diagnosis": None,
-                    "duration": time.time() - started,
-                }
-            )
-            telemetry.incr("requests_total", {"outcome": "success"})
-            if client_wants_stream:
-                if cleanup_changes:
-                    # The raw SSE lines still carry the leaked tags; rebuild
-                    # the stream from the cleaned values instead.
-                    lines = _reconstruct_sse_lines(
-                        meta, content, reasoning, tool_calls
-                    )
-                else:
-                    lines = list(sse_lines)
-                    # Guarantee a clean SSE termination even if the upstream
-                    # omits the ``[DONE]`` sentinel (some providers do).
-                    if not lines or lines[-1].strip() != "data: [DONE]":
-                        lines.append("data: [DONE]")
-                sse_body = "".join(
-                    f"{line}\n\n" for line in lines
-                ).encode("utf-8")
-                return Response(
-                    content=sse_body,
-                    status_code=200,
-                    media_type="text/event-stream",
-                )
-            return Response(
-                content=final_body,
-                status_code=200,
-                media_type="application/json",
+            return _StreamResult(
+                content=content,
+                reasoning=reasoning,
+                tool_calls=tool_calls,
+                meta=meta,
+                sse_lines=sse_lines,
+                finish_reason=meta.get("finish_reason") or "stop",
+                relocate_changes=relocate_changes,
+                status=status,
+                resp_headers=resp_headers,
+                attempt=attempt,
+                max_attempts=policy.max_attempts,
+                duration=time.time() - started,
             )
 
         # Exhausted retries (all attempts errored) — defensive fallback.
+        return _StreamResult(
+            response=Response(
+                content=b'{"error": "upstream failure"}',
+                status_code=502,
+                media_type="application/json",
+            )
+        )
+
+    def _record_nudge_pass(
+        self,
+        base_entry: dict,
+        result: _StreamResult,
+        client_wants_stream: bool,
+        nudge_attempt: int,
+    ) -> None:
+        """Record an empty-text turn that triggered a nudge re-submission."""
+        final_body = json.dumps(
+            _reconstruct_chat_completion(
+                result.meta, result.content, result.reasoning, result.tool_calls
+            )
+        ).encode("utf-8")
+        self.recorder.record(
+            {
+                **base_entry,
+                "attempt": result.attempt,
+                "max_attempts": result.max_attempts,
+                "status": result.status,
+                "response_headers": result.resp_headers,
+                "response_body": _decode(final_body),
+                "streamed": client_wants_stream,
+                "think_cleanup": result.relocate_changes or None,
+                "nudge": {"attempt": nudge_attempt, "outcome": "triggered"},
+                "diagnosis": None,
+                "duration": result.duration,
+            }
+        )
+
+    def _finalize_success(
+        self,
+        base_entry: dict,
+        result: _StreamResult,
+        guard,
+        client_wants_stream: bool,
+        nudge_attempt: int,
+        nudge_outcome: str | None,
+    ) -> Response:
+        """Apply the placeholder floor, record, and return the final response."""
+        content = result.content
+        reasoning = result.reasoning
+        cleanup_changes = list(result.relocate_changes)
+        if guard is not None:
+            content, guard_changes = guard.guard_empty(
+                content, reasoning, result.tool_calls
+            )
+            cleanup_changes.extend(guard_changes)
+
+        final_body = json.dumps(
+            _reconstruct_chat_completion(
+                result.meta, content, reasoning, result.tool_calls
+            )
+        ).encode("utf-8")
+
+        nudge_entry = None
+        if nudge_outcome is not None:
+            nudge_entry = {"attempts": nudge_attempt, "outcome": nudge_outcome}
+
+        self.recorder.record(
+            {
+                **base_entry,
+                "attempt": result.attempt,
+                "max_attempts": result.max_attempts,
+                "status": result.status,
+                "response_headers": result.resp_headers,
+                "response_body": _decode(final_body),
+                "streamed": client_wants_stream,
+                "think_cleanup": cleanup_changes or None,
+                "nudge": nudge_entry,
+                "diagnosis": None,
+                "duration": result.duration,
+            }
+        )
+        telemetry.incr("requests_total", {"outcome": "success"})
+
+        if client_wants_stream:
+            if cleanup_changes:
+                # The raw SSE lines still carry the leaked tags; rebuild the
+                # stream from the cleaned values instead.
+                lines = _reconstruct_sse_lines(
+                    result.meta, content, reasoning, result.tool_calls
+                )
+            else:
+                lines = list(result.sse_lines)
+                # Guarantee a clean SSE termination even if the upstream
+                # omits the ``[DONE]`` sentinel (some providers do).
+                if not lines or lines[-1].strip() != "data: [DONE]":
+                    lines.append("data: [DONE]")
+            sse_body = "".join(f"{line}\n\n" for line in lines).encode("utf-8")
+            return Response(
+                content=sse_body,
+                status_code=200,
+                media_type="text/event-stream",
+            )
         return Response(
-            content=b'{"error": "upstream failure"}',
-            status_code=502,
+            content=final_body,
+            status_code=200,
             media_type="application/json",
         )

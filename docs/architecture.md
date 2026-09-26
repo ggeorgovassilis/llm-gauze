@@ -160,22 +160,48 @@ Copilot's agentic flow.
 
 Think-tag cleanup is therefore a **content transform** (not a failure
 `Detector`): it rewrites the assembled completion rather than classifying it.
+It is split into two steps so the nudge rung (below) can sit between them:
 
-- `ThinkContentGuard.clean(content, reasoning)` **relocates** the inner text of
-  any leaked thinking tag out of `content` and appends it to `reasoning` —
+- `ThinkContentGuard.relocate(content, reasoning)` **relocates** the inner text
+  of any leaked thinking tag out of `content` and appends it to `reasoning` —
   nothing is discarded. Tag names are configurable (`THINK_TAGS`) and matched
   case-insensitively by exact tag name — no fuzzy heuristics.
 - A trailing unmatched opening tag (`<think>…` with no close) is treated the
   same way: the remainder is reasoning.
-- If the visible `content` is empty/whitespace after relocation but reasoning
-  exists, a short configurable placeholder (`THINK_EMPTY_RESPONSE_PLACEHOLDER`)
-  is emitted instead of an empty turn.
+- `ThinkContentGuard.guard_empty(content, reasoning, tool_calls)` applies the
+  **placeholder floor**: if the visible `content` is empty/whitespace but
+  reasoning exists (and there are no tool calls), a short configurable
+  placeholder (`THINK_EMPTY_RESPONSE_PLACEHOLDER`) is emitted instead of an
+  empty turn.
+- `ThinkContentGuard.clean(...)` is the composition of `relocate` + `guard_empty`.
 - Every change is reported back to the recorder as a `think_cleanup` list of
   `{kind, …}` records (`relocated_think`, `empty_content_placeholder`), so the
   mutation is never silent.
 - It runs after streaming reconstruction, before the response is rebuilt. For a
   `stream: true` client whose output was changed, the SSE stream is rebuilt
   from the cleaned values; untouched streams are passed through verbatim.
+
+## Nudge (re-prompt empty-text turns)
+
+The placeholder above only guarantees a *non-empty* turn — it does not recover
+the answer the model was heading toward. A turn that finished with
+`finish_reason: stop`, no visible `content`, no `tool_calls`, but non-empty
+`reasoning` is instead re-submitted once with a short nudge re-prompt, giving
+the model a second chance to surface real output. This is the first rung of the
+empty-response ladder (`nudge → extract → placeholder floor`).
+
+- `NudgePolicy.should_nudge(finish_reason, content, tool_calls, reasoning)` is a
+  pure predicate over the *relocated* turn: stop + empty content + no tool
+  calls + non-empty reasoning. Deterministic — no heuristics.
+- `NudgePolicy.apply(body)` appends `{"role": "user", "content": <nudge>}` to a
+  copy of the request (the nudge text is `THINK_NUDGE_TEXT`) without mutating
+  the input.
+- The re-submitted request reuses the streaming path unchanged; the budget is
+  `THINK_NUDGE_MAX_ATTEMPTS`, and each nudge pass is recorded with an
+  `outcome` (`triggered`, `succeeded`, or `exhausted`) so the intervention is
+  visible in `records.jsonl`.
+- On exhaustion the placeholder floor (`guard_empty`) is applied as before, so
+  the client still receives a non-empty turn.
 
 Extracting a *usable answer* from the relocated chain-of-thought is deliberately
 out of scope here (see #13): it is not deterministically fixable, and surfacing

@@ -21,6 +21,7 @@ from app.remediation.base import (
 )
 from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
 from app.remediation.loop import ThinkingLoopDetector
+from app.remediation.nudge import NudgePolicy
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.stall import StallDetector
 from app.remediation.think import ThinkContentGuard
@@ -39,4 +40,5 @@ __all__ = [
     "ContextWindowDetector",
     "CONTEXT_WINDOW_CODE",
     "ThinkContentGuard",
+    "NudgePolicy",
 ]

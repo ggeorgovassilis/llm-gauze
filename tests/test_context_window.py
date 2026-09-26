@@ -72,6 +72,20 @@ def test_markers_are_case_insensitive():
     assert diagnosis.code == CONTEXT_WINDOW_CODE, diagnosis
 
 
+def test_detects_litellm_phrasing():
+    # LiteLLM wraps the provider's overflow with its own wording ("exceeds
+    # the available context size") rather than llama.cpp's phrasing.
+    d = _detector()
+    body = (
+        '{"error": {"message": "litellm.ContextWindowExceededError: '
+        'request (33101 tokens) exceeds the available context size '
+        '(32768 tokens), try increasing it"}}'
+    )
+    diagnosis = d.diagnose_status(400, body=body.encode())
+    assert diagnosis.retryable is False, diagnosis
+    assert diagnosis.code == CONTEXT_WINDOW_CODE, diagnosis
+
+
 def test_defers_when_no_marker():
     d = _detector()
     diagnosis = d.diagnose_status(500, body=b'{"error": "internal error"}')

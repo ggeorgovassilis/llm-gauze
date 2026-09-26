@@ -717,9 +717,15 @@ class Proxy:
                             _merge_meta(meta, chunk_meta)
                             _merge_tool_calls(tool_calls, delta_tool_calls)
 
-                            # Only a content-bearing token proves the model is
+                            # Any model-produced delta proves the model is
                             # alive; reset the stall watchdog on those.
-                            if delta_reasoning or delta_content:
+                            # Tool-call fragments count too: a model slowly
+                            # streaming arguments is working, not stalled.
+                            if (
+                                delta_reasoning
+                                or delta_content
+                                or delta_tool_calls
+                            ):
                                 if stall is not None:
                                     stall.note_token()
 
@@ -783,6 +789,11 @@ class Proxy:
                         "abort_stream": loop_stream,
                         "abort_reason": loop_verdict.reason,
                         "abort_details": loop_verdict.details,
+                        # Preserve whatever the model produced before the
+                        # abort so the hang/loop can be diagnosed post-hoc.
+                        "partial_content": content or None,
+                        "partial_reasoning": reasoning or None,
+                        "partial_tool_calls": tool_calls or None,
                         "duration": time.time() - started,
                     }
                 )

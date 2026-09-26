@@ -134,6 +134,64 @@ def test_stall_does_not_abort_flowing_stream():
     assert data["choices"][0]["message"]["content"] == "Hello world", data
 
 
+def test_tool_call_deltas_reset_stall_timer():
+    """Tool-call fragments are content-bearing: a slow argument stream must
+    not be misread as a stall even when no reasoning/content token appears."""
+    # Each tool-call fragment arrives within the 0.3s gap budget, but there is
+    # never a reasoning/content token — pre-fix this tripped the watchdog.
+    steps = [
+        (0.05, _sse(_chunk({"role": "assistant", "content": ""}))),
+        (
+            0.05,
+            _sse(
+                _chunk(
+                    {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "Paris"}',
+                                },
+                            }
+                        ]
+                    }
+                )
+            ),
+        ),
+        (0.05, _sse(_chunk({}, finish_reason="tool_calls"))),
+    ]
+    resp = _run_forward(steps)
+    assert resp.status_code == 200, (resp.status_code, resp.body)
+    data = json.loads(resp.body)
+    call = data["choices"][0]["message"]["tool_calls"][0]
+    assert call["function"]["name"] == "get_weather", call
+
+
+def test_stall_abort_records_partial_output():
+    """The abort record preserves partial reasoning/content/tool-calls."""
+    steps = [
+        (0.0, _sse(_chunk({"reasoning_content": "about to call a tool"}))),
+        # Then nothing for far beyond the gap budget -> stall.
+        (0.5, _sse(_chunk({}, finish_reason="stop"))),
+    ]
+    resp = _run_forward(steps)
+    assert resp.status_code == settings.stall_abort_status, (
+        resp.status_code,
+        resp.body,
+    )
+    records = [
+        json.loads(line)
+        for line in open("/tmp/stall_integration.jsonl")
+        if line.strip()
+    ]
+    abort = [r for r in records if r.get("abort_kind") == "stalled"][-1]
+    assert abort["partial_reasoning"] == "about to call a tool", abort
+    assert abort["partial_content"] is None, abort
+
+
 def _run_all() -> int:
     tests = [
         value

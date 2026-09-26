@@ -2,10 +2,18 @@ services:
   gateway:
     build:
       context: .
+    # Run as the host user (UID/GID, default 1000) so files written to the
+    # bind-mounted volumes (data/, and __pycache__ under source/) are owned by
+    # the developer, not root, and can be deleted/rotated without sudo.
+    user: "${UID:-1000}:${GID:-1000}"
     ports:
       - "${PORT:-9317}:8000"
     env_file:
       - .env
+    environment:
+      # Never write .pyc to the bind-mounted source tree; keeps it clean and
+      # owned by the developer.
+      - PYTHONDONTWRITEBYTECODE=1
     extra_hosts:
       # Lets the container reach the host's local LLM at host.docker.internal.
       - "host.docker.internal:host-gateway"

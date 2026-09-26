@@ -115,6 +115,21 @@ status/headers/body, duration, any error (with traceback), the diagnosis, and
 the attempt number. This is the raw material for the detection/remediation
 phases to come.
 
+### File ownership
+
+The container runs as your host user (`UID`/`GID`, default `1000`) so that the
+files it writes — `data/records*.jsonl` and the `__pycache__` dirs under
+`source/` — are owned by you, not root. Two things to note:
+
+- Bytecode caching is disabled (`PYTHONDONTWRITEBYTECODE=1`) so the bind-mounted
+  source tree stays clean.
+- Directories created *before* this change (e.g. a root-owned `data/`) still
+  need a one-time ownership fix, otherwise the non-root container can't write:
+
+  ```bash
+  sudo chown -R "$(id -u):$(id -g)" data source
+  ```
+
 ## Roadmap
 
 - ~~Retries on transient errors.~~

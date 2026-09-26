@@ -25,6 +25,7 @@ from app.remediation.nudge import NudgePolicy
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.stall import StallDetector
 from app.remediation.think import ThinkContentGuard
+from app.remediation.tool_call import ToolCallGuard
 
 __all__ = [
     "Backoff",
@@ -41,4 +42,5 @@ __all__ = [
     "CONTEXT_WINDOW_CODE",
     "ThinkContentGuard",
     "NudgePolicy",
+    "ToolCallGuard",
 ]

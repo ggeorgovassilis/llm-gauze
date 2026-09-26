@@ -207,6 +207,34 @@ Extracting a *usable answer* from the relocated chain-of-thought is deliberately
 out of scope here (see #13): it is not deterministically fixable, and surfacing
 raw reasoning as content would be a quality regression.
 
+## Tool-call syntax enforcement
+
+Local models sometimes emit malformed or truncated tool calls: unbalanced
+braces, cut-off `function.arguments`, or a stray trailing comma. Forwarded
+verbatim these break the client's own JSON parse. This is a **content
+transform** (not a failure `Detector`) that runs on the assembled tool-call
+list after streaming reconstruction:
+
+- `ToolCallGuard.validate(tool_calls)` validates each call's
+  `function.arguments` as a JSON string. Valid arguments pass through untouched.
+- Truncation — the only breakage fixable *deterministically* — is repaired: a
+  single forward scan tracks string/escape state and bracket nesting, closes an
+  unterminated string, then closes open containers innermost-first while
+  dropping a dangling trailing comma. The repaired string must re-parse as JSON
+  or the call is left alone.
+- Anything else (mismatched brackets, a dangling escape, missing
+  `function`/`name`, non-string `arguments`) is **flagged**, never repaired:
+  the request is not crashed and the malformed call is passed through.
+- Every mutation/flag is reported back to the recorder as a `tool_repair` list
+  of `{kind, index, …}` records (`repaired_arguments`, `flagged_malformed`), so
+  the intervention is never silent.
+- When the output changed (repair or think-cleanup), the `stream: true` client's
+  SSE stream is rebuilt from the repaired values; untouched streams pass through.
+
+Schema-level validation (does `arguments` match the target function's shape) is
+out of scope: the gateway does not know the tool schema. This guard only ensures
+`arguments` is *well-formed JSON*.
+
 
 ## Timeout model
 

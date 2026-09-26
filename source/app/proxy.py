@@ -27,6 +27,7 @@ from app.remediation.nudge import NudgePolicy
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.stall import StallDetector
 from app.remediation.think import ThinkContentGuard
+from app.remediation.tool_call import ToolCallGuard
 from app.telemetry import telemetry
 
 logger = logging.getLogger("bandaid.proxy")
@@ -982,6 +983,12 @@ class Proxy:
             )
             cleanup_changes.extend(guard_changes)
 
+        tool_changes: list = []
+        if settings.tool_call_guard_enabled and result.tool_calls:
+            tool_changes = ToolCallGuard.from_settings().validate(
+                result.tool_calls
+            )
+
         final_body = json.dumps(
             _reconstruct_chat_completion(
                 result.meta, content, reasoning, result.tool_calls
@@ -1002,6 +1009,7 @@ class Proxy:
                 "response_body": _decode(final_body),
                 "streamed": client_wants_stream,
                 "think_cleanup": cleanup_changes or None,
+                "tool_repair": tool_changes or None,
                 "nudge": nudge_entry,
                 "diagnosis": None,
                 "duration": result.duration,
@@ -1009,10 +1017,12 @@ class Proxy:
         )
         telemetry.incr("requests_total", {"outcome": "success"})
 
+        mutated = bool(cleanup_changes or tool_changes)
         if client_wants_stream:
-            if cleanup_changes:
-                # The raw SSE lines still carry the leaked tags; rebuild the
-                # stream from the cleaned values instead.
+            if mutated:
+                # The raw SSE lines still carry the pre-remediation values
+                # (leaked tags or malformed tool-call arguments); rebuild the
+                # stream from the cleaned/repaired values instead.
                 lines = _reconstruct_sse_lines(
                     result.meta, content, reasoning, result.tool_calls
                 )

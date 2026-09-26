@@ -97,6 +97,12 @@ second chance to emit a real answer, before falling back to the placeholder):
 - `THINK_NUDGE_TEXT` — nudge text appended as a `user` message.
 - `THINK_NUDGE_MAX_ATTEMPTS` — max re-submissions before the placeholder floor.
 
+Tool-call syntax enforcement (each assembled `function.arguments` is validated
+as JSON; truncated arguments are repaired where deterministic, the rest are
+flagged on the record without crashing the request):
+
+- `TOOL_CALL_GUARD_ENABLED` — master switch for tool-call validation/repair.
+
 Recording:
 
 - `DATA_DIR` / `RECORD_FILE` — where exchanges are recorded (JSONL).

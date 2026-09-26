@@ -147,5 +147,11 @@ class Settings(BaseSettings):
     # placeholder floor (see ``think_empty_response_placeholder``).
     think_nudge_max_attempts: int = 2
 
+    # --- Tool-call syntax enforcement --------------------------------
+    # Master switch for validating assembled tool calls: repair truncated
+    # ``function.arguments`` where deterministic, flag the rest without
+    # crashing the request.
+    tool_call_guard_enabled: bool = True
+
 
 settings = Settings()

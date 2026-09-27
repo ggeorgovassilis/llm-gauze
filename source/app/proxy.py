@@ -23,6 +23,7 @@ from app.recorder import Recorder
 from app.remediation.base import RetryPolicy, StreamVerdict
 from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
 from app.remediation.loop import ThinkingLoopDetector
+from app.remediation.loop_retry import LoopRetryPolicy
 from app.remediation.nudge import NudgePolicy
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.stall import StallDetector
@@ -60,6 +61,10 @@ class _StreamResult:
     """
 
     response: Response | None = None
+    # Set when the exchange ended in a content verdict (loop or stall); lets
+    # the caller decide whether to remediate (loop) or abort outright (stall).
+    loop_verdict: StreamVerdict | None = None
+    loop_stream: str | None = None
     content: str = ""
     reasoning: str = ""
     tool_calls: list = field(default_factory=list)
@@ -538,9 +543,11 @@ class Proxy:
 
         The upstream is asked for ``stream: true`` so the output can be
         observed incrementally. Two independent detectors run — one over the
-        thinking (reasoning) stream, one over the visible response — and a
-        loop in either aborts the request (never retried: retrying just
-        re-enters the loop).
+        thinking (reasoning) stream, one over the visible response. A detected
+        *loop* is first remediated by re-submitting with varied sampling
+        (higher temperature, stronger repeat penalties) up to a small budget;
+        only if it still loops is the request aborted. A *stall* is never
+        retried — retrying just re-waits for a silent model.
 
         On a successful but empty turn (``finish_reason`` stop, no content, no
         tool calls, non-empty reasoning), the request is re-submitted with a
@@ -573,8 +580,12 @@ class Proxy:
             else None
         )
 
+        loop_retry = (
+            LoopRetryPolicy.from_settings() if settings.loop_retry_enabled else None
+        )
         current_body = body
         nudge_attempt = 0
+        loop_retry_attempt = 0
         while True:
             stream_body, _ = _ensure_stream(current_body)
             result = await self._stream_once(
@@ -587,6 +598,23 @@ class Proxy:
                 base_entry,
             )
             if result.response is not None:
+                # A *loop* (not a stall) can be broken by re-submitting with
+                # varied sampling — a loop is often a fixed point of the
+                # sampler. Stalls are aborted outright (retrying just re-waits
+                # for a silent model).
+                if (
+                    loop_retry is not None
+                    and result.loop_verdict is not None
+                    and result.loop_verdict.kind == "loop"
+                    and loop_retry_attempt < loop_retry.max_attempts
+                ):
+                    resubmitted = loop_retry.apply(json.loads(current_body))
+                    self._record_loop_retry_pass(
+                        base_entry, result, loop_retry_attempt, resubmitted
+                    )
+                    loop_retry_attempt += 1
+                    current_body = json.dumps(resubmitted).encode("utf-8")
+                    continue
                 return result.response
 
             empty_turn = bool(
@@ -754,6 +782,28 @@ class Proxy:
                         loop_verdict = thinking.flush()
                         if loop_verdict is not None:
                             loop_stream = "thinking"
+
+                # The upstream filled the output window without the model
+                # finishing. llama.cpp reports this as ``n_tokens = 8191,
+                # truncated = 1`` and LiteLLM surfaces it as
+                # ``finish_reason: "length"``. That is a definitive runaway
+                # signal — the model never stopped — so treat it as a loop
+                # regardless of whether the content looked repetitive. This
+                # catches *drift* loops (near-identical but not verbatim)
+                # which the compression-ratio check above misses.
+                if (
+                    loop_verdict is None
+                    and meta.get("finish_reason") == "length"
+                ):
+                    loop_verdict = StreamVerdict(
+                        kind="loop",
+                        reason=(
+                            "output window exhausted "
+                            "(finish_reason=length)"
+                        ),
+                        details={"finish_reason": "length"},
+                    )
+                    loop_stream = "response"
             except Exception as exc:  # noqa: BLE001 - capture everything
                 error = {
                     "type": type(exc).__name__,
@@ -813,7 +863,9 @@ class Proxy:
                     loop_verdict.reason,
                 )
                 return _StreamResult(
-                    response=_abort_error_response(loop_verdict)
+                    response=_abort_error_response(loop_verdict),
+                    loop_verdict=loop_verdict,
+                    loop_stream=loop_stream,
                 )
 
             # Transport error -> retry or give up (mirrors the buffered path).
@@ -970,6 +1022,36 @@ class Proxy:
                 "streamed": client_wants_stream,
                 "think_cleanup": result.relocate_changes or None,
                 "nudge": {"attempt": nudge_attempt, "outcome": "triggered"},
+                "diagnosis": None,
+                "duration": result.duration,
+            }
+        )
+
+    def _record_loop_retry_pass(
+        self,
+        base_entry: dict,
+        result: _StreamResult,
+        loop_retry_attempt: int,
+        resubmitted_body: dict,
+    ) -> None:
+        """Record a looped turn that triggered a varied-sampling re-submission.
+
+        ``resubmitted_body`` is the exact request body sent upstream on the
+        re-submission, so the overridden sampling parameters are auditable
+        against the client's original ``request_body`` (already in the entry).
+        """
+        self.recorder.record(
+            {
+                **base_entry,
+                "attempt": result.attempt,
+                "max_attempts": result.max_attempts,
+                "status": result.status,
+                "response_headers": result.resp_headers,
+                "loop_retry": {
+                    "attempt": loop_retry_attempt,
+                    "outcome": "triggered",
+                    "resubmitted_body": resubmitted_body,
+                },
                 "diagnosis": None,
                 "duration": result.duration,
             }

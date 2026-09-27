@@ -63,6 +63,50 @@ class _MockServer:
         self.server.shutdown()
 
 
+class _SequenceHandler(BaseHTTPRequestHandler):
+    """Serves a *different* chunk-list per request, capturing request bodies.
+
+    Used to verify loop remediation: the first exchange loops, the second is
+    re-submitted with varied sampling and produces a clean turn.
+    """
+
+    responses: list = []
+    requests: list = []
+
+    def do_POST(self):
+        length = int(self.headers.get("content-length", 0))
+        body = self.rfile.read(length) if length else b""
+        type(self).requests.append(json.loads(body.decode("utf-8")))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        chunks = type(self).responses.pop(0) if type(self).responses else []
+        for chunk in chunks:
+            try:
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                break
+
+    def log_message(self, *args):  # silence request logging
+        pass
+
+
+class _SequenceServer:
+    def __init__(self, responses):
+        self.server = HTTPServer(("127.0.0.1", 0), _SequenceHandler)
+        _SequenceHandler.responses = list(responses)
+        _SequenceHandler.requests = []
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(
+            target=self.server.serve_forever, daemon=True
+        )
+        self.thread.start()
+
+    def stop(self):
+        self.server.shutdown()
+
+
 def _run_forward(chunks):
     mock = _MockServer(chunks)
     try:
@@ -70,6 +114,12 @@ def _run_forward(chunks):
         async def run():
             settings.llm_base_url = f"http://127.0.0.1:{mock.port}"
             settings.loop_detection_enabled = True
+            # Loop remediation is exercised by its own dedicated tests; keep
+            # the shared abort tests on the pure detect-and-abort path.
+            settings.loop_retry_enabled = False
+            # Small window so the loop test arms on a short payload.
+            settings.loop_window_bytes = 2000
+            settings.loop_min_output_fraction = 0.5
             recorder = Recorder("/tmp/loop_integration.jsonl")
             proxy = Proxy(recorder)
             body = json.dumps(
@@ -96,19 +146,139 @@ def _run_forward(chunks):
 
 def test_loop_abort():
     sentence = "Let me carefully reconsider the whole approach before continuing."
+    # Enough repetitions to cross the (small) arming gate set in _run_forward.
     chunks = [
         _chunk({"role": "assistant", "content": ""}),
-        *[_chunk({"content": sentence + ". "}) for _ in range(8)],
+        *[_chunk({"content": sentence + ". "}) for _ in range(40)],
         _chunk(
             {},
             finish_reason="stop",
-            usage={"prompt_tokens": 1, "completion_tokens": 8, "total_tokens": 9},
+            usage={"prompt_tokens": 1, "completion_tokens": 40, "total_tokens": 41},
         ),
     ]
     resp = _run_forward(chunks)
     data = json.loads(resp.body)
     assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
     assert data["error"]["type"] == "loop_detected", data
+
+
+def test_finish_reason_length_is_a_loop():
+    # Regression: a *drift* loop (near-identical, not verbatim) does not trip
+    # the compression-ratio detector, so the model runs to the output window
+    # limit and the upstream returns ``finish_reason: "length"`` (llama.cpp
+    # ``truncated = 1``). That truncation is itself a runaway signal and must
+    # be treated as a loop, not passed through as a truncated 200.
+    sentences = [
+        "Let me carefully reconsider whether the total should be zero.",
+        "Let me carefully reconsider whether the count should be zero.",
+        "Let me carefully reconsider whether the sum should be zero.",
+        "Let me carefully reconsider whether the value should be zero.",
+        "Let me carefully reconsider whether the index should be zero.",
+    ]
+    chunks = [
+        _chunk({"role": "assistant", "content": ""}),
+        *[_chunk({"content": s + " "}) for s in sentences],
+        _chunk(
+            {},
+            finish_reason="length",
+            usage={"prompt_tokens": 4164, "completion_tokens": 4028, "total_tokens": 8192},
+        ),
+    ]
+    resp = _run_forward(chunks)
+    data = json.loads(resp.body)
+    assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
+    assert data["error"]["type"] == "loop_detected", data
+    assert "window exhausted" in data["error"]["reason"], data
+
+
+def _loop_chunks():
+    sentence = "Let me carefully reconsider the whole approach before continuing."
+    return [
+        _chunk({"role": "assistant", "content": ""}),
+        *[_chunk({"content": sentence + ". "}) for _ in range(40)],
+        _chunk({}, finish_reason="stop"),
+    ]
+
+
+def _run_forward_sequence(responses):
+    mock = _SequenceServer(responses)
+    try:
+
+        async def run():
+            settings.llm_base_url = f"http://127.0.0.1:{mock.port}"
+            settings.loop_detection_enabled = True
+            settings.loop_retry_enabled = True
+            settings.loop_retry_max_attempts = 2
+            settings.loop_window_bytes = 2000
+            settings.loop_min_output_fraction = 0.5
+            recorder = Recorder("/tmp/loop_retry_integration.jsonl")
+            proxy = Proxy(recorder)
+            body = json.dumps(
+                {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
+            ).encode()
+            return await proxy._forward_streaming(
+                request_id="itest-retry",
+                method="POST",
+                url="/v1/chat/completions",
+                query="",
+                body=body,
+                headers={"content-type": "application/json"},
+                base_entry={
+                    "request_id": "itest-retry",
+                    "method": "POST",
+                    "path": "/v1/chat/completions",
+                },
+            )
+
+        return asyncio.run(run())
+    finally:
+        mock.stop()
+
+
+def test_loop_retry_breaks_loop():
+    """A looped first pass is re-submitted with varied sampling and succeeds."""
+    good = [
+        _chunk({"role": "assistant", "content": ""}),
+        _chunk({"content": "The capital of France is Paris."}),
+        _chunk({}, finish_reason="stop"),
+    ]
+    resp = _run_forward_sequence([_loop_chunks(), good])
+    assert resp.status_code == 200, (resp.status_code, resp.body)
+    data = json.loads(resp.body)
+    assert data["object"] == "chat.completion", data
+    assert "Paris" in data["choices"][0]["message"]["content"], data
+    # Two upstream exchanges: the loop, then the varied-sampling re-submission.
+    assert len(_SequenceHandler.requests) == 2, _SequenceHandler.requests
+    second = _SequenceHandler.requests[1]
+    assert second["temperature"] == settings.loop_retry_temperature, second
+    assert second["repeat_penalty"] == settings.loop_retry_repeat_penalty, second
+    assert second["presence_penalty"] == settings.loop_retry_presence_penalty, second
+    assert (
+        second["frequency_penalty"] == settings.loop_retry_frequency_penalty
+    ), second
+    # The recorded loop_retry entry must capture the exact re-submitted body,
+    # so the overridden sampling is auditable against the client's original.
+    recorded = [
+        line for line in open("/tmp/loop_retry_integration.jsonl")
+        if json.loads(line).get("loop_retry")
+    ]
+    assert recorded, "expected a loop_retry record"
+    entry = json.loads(recorded[-1])
+    rb = entry["loop_retry"]["resubmitted_body"]
+    assert rb["temperature"] == settings.loop_retry_temperature, rb
+    assert rb["repeat_penalty"] == settings.loop_retry_repeat_penalty, rb
+    assert rb["presence_penalty"] == settings.loop_retry_presence_penalty, rb
+    assert rb["frequency_penalty"] == settings.loop_retry_frequency_penalty, rb
+
+
+def test_loop_retry_exhausts_to_abort():
+    """When every re-submission still loops, the request aborts."""
+    resp = _run_forward_sequence([_loop_chunks(), _loop_chunks(), _loop_chunks()])
+    assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
+    data = json.loads(resp.body)
+    assert data["error"]["type"] == "loop_detected", data
+    # Original attempt + loop_retry_max_attempts re-submissions.
+    assert len(_SequenceHandler.requests) == 3, _SequenceHandler.requests
 
 
 def test_non_loop_reconstruction():

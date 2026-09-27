@@ -51,8 +51,8 @@ failure ──▶ Detector (understanding) ──▶ Diagnosis ──▶ Backoff
 - `app/remediation/retry.py` — `RetryableDetector` (transient exceptions +
   retryable HTTP statuses) and `ExponentialBackoff` (with optional jitter).
 - `app/remediation/loop.py` — `ThinkingLoopDetector`, a stateful
-  `StreamDetector` that flags repetitive output via n-gram recurrence and low
-  compression entropy.
+  `StreamDetector` that flags repetitive output via byte-window compression
+  entropy.
 - `app/remediation/stall.py` — `StallDetector`, a time-based watchdog that
   flags a stream which has stopped producing content tokens (silent hang).
 - `app/remediation/context.py` — `ContextWindowDetector`, which recognises the
@@ -73,7 +73,7 @@ rather than editing the proxy.
 ## Loop detection
 
 Reasoning models sometimes get stuck regenerating the same or near-identical
-sentences. Loop detection is a **content** signal (unlike retry, which handles
+text. Loop detection is a **content** signal (unlike retry, which handles
 transport/status failures), so the gateway observes output as it is generated:
 
 - Chat completions are requested from upstream with `stream: true` so the
@@ -86,16 +86,40 @@ transport/status failures), so the gateway observes output as it is generated:
   not a loop.
 - Each detector is stateful and created fresh per request (with `reset()`),
   never shared across concurrent requests.
-- On detection the gateway logs it prominently, records an `abort_kind`
-  diagnosis, aborts the upstream request (no retry — retrying just re-enters
-  the loop), and returns a `loop_abort_status` error to the client.
+- On detection the gateway logs it prominently and records an `abort_kind`
+  diagnosis.
 
-Detection uses two independent signals, both configurable via `.env`:
+A detected **loop** is first *remediated* before giving up: the request is
+re-submitted with varied sampling. Model-appropriate sampling is the client's
+and endpoint's domain, so bandaid never invents values — a sampling parameter
+the client already submitted is nudged up by `LOOP_RETRY_INCREMENT` (0.1); one
+it did *not* submit is set to its configured fallback. The parameters affected
+are `temperature`, `repeat_penalty` (llama.cpp), `presence_penalty` and
+`frequency_penalty` (OpenAI). A loop is often a fixed point of the sampler:
+the same deterministic reasoning cycle repeats because, given the same prompt
+and the same parameters, the model re-walks the same path. Perturbing the
+sampling breaks the cycle without changing the task. This is bounded by
+`LOOP_RETRY_MAX_ATTEMPTS`; only when every re-submission also loops does the
+gateway return a `loop_abort_status` error. A **stall** is never remediated
+this way — retrying just re-waits for a silent model.
 
-1. **n-gram recurrence** — Jaccard similarity of word n-grams against a sliding
-   window of recent sentences (`LOOP_*` settings).
-2. **low compression entropy** — zlib compression ratio of the window text,
-   gated by a minimum window length.
+Detection is **byte-level** and **gated**, both configurable via `.env`:
+
+1. **compression entropy** — zlib compression ratio over a sliding byte window
+   (`LOOP_WINDOW_BYTES`); a ratio below `LOOP_COMPRESSION_RATIO` means the
+   window is repetitive.
+2. **arming gate** — detection only starts once the stream has produced
+   `LOOP_MIN_OUTPUT_FRACTION` of the window. Short structured output (e.g. a
+   model enumerating near-identical tool results) finishes before the gate, so
+   it is never flagged; a genuine loop keeps repeating until it is caught.
+
+A third, *terminal* signal catches drift loops (near-identical, not verbatim)
+that the compression check cannot: **`finish_reason: "length"`**. When the
+upstream fills the output window without the model finishing, llama.cpp
+reports `truncated = 1` and LiteLLM surfaces `finish_reason: "length"`. The
+gateway treats that truncation itself as a runaway loop — so it flows through
+the same remediation/abort path above — rather than passing a truncated 200
+through to the client.
 
 
 ## Stall detection

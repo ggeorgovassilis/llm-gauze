@@ -49,16 +49,21 @@ Retries (transient upstream failures are retried with exponential backoff):
 - `RETRYABLE_STATUS_CODES` — comma-separated HTTP statuses that warrant a retry.
 
 Loop detection (chat completions are streamed from upstream and observed for
-repetitive output; a loop aborts the request with a `loop_detected` error):
+repetitive output; a loop is first re-submitted with varied sampling, then
+aborted with a `loop_detected` error if it still loops):
 
 - `LOOP_DETECTION_ENABLED` — master switch for loop detection.
-- `LOOP_WINDOW_SENTENCES` — recent sentences compared against.
-- `LOOP_JACCARD_THRESHOLD` — similarity threshold for "same sentence".
-- `LOOP_MIN_LOOP_COUNT` — similar sentences in the window that constitute a loop.
-- `LOOP_NGRAM_SIZE` — word n-gram size used for similarity.
+- `LOOP_WINDOW_BYTES` — sliding output window (bytes) over which repetition is measured.
+- `LOOP_MIN_OUTPUT_FRACTION` — fraction of the window that must be produced before detection arms.
 - `LOOP_COMPRESSION_RATIO` — compression ratio below which output is low-entropy.
-- `LOOP_COMPRESSION_MIN_CHARS` — min window length before the compression check.
-- `LOOP_ABORT_STATUS` — HTTP status returned when a loop is detected.
+- `LOOP_ABORT_STATUS` — HTTP status returned when a loop is detected and not remediated.
+- `LOOP_RETRY_ENABLED` — re-submit a looped request with varied sampling instead of aborting.
+- `LOOP_RETRY_MAX_ATTEMPTS` — maximum loop re-submissions before giving up.
+- `LOOP_RETRY_INCREMENT` — amount added to a sampling parameter the client already submitted.
+- `LOOP_RETRY_TEMPERATURE` — fallback temperature when the client submitted none.
+- `LOOP_RETRY_REPEAT_PENALTY` — fallback llama.cpp repeat penalty when the client submitted none.
+- `LOOP_RETRY_PRESENCE_PENALTY` — fallback OpenAI presence penalty when the client submitted none.
+- `LOOP_RETRY_FREQUENCY_PENALTY` — fallback OpenAI frequency penalty when the client submitted none.
 
 Stall detection (a stream that returns headers but stops producing content
 tokens is aborted with a `stalled_detected` error; timers reset only on real

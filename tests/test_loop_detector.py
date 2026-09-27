@@ -5,6 +5,7 @@ Runs with plain Python (stdlib only) inside the container:
     docker compose exec -T gateway python - < tests/test_loop_detector.py
 """
 
+import random
 import traceback
 
 try:
@@ -18,87 +19,125 @@ except ImportError:  # pragma: no cover - run on host without the container
 
 
 def _make(**kwargs) -> ThinkingLoopDetector:
+    # Small window so tests run on short payloads; fraction 0.5 arms at half
+    # the window. The ratio threshold matches production (0.15): a verbatim
+    # loop compresses to ~0.004 while varied text stays well above it.
     defaults = dict(
-        window_sentences=10,
-        jaccard_threshold=0.6,
-        min_loop_count=2,
-        ngram_size=3,
-        compression_ratio=0.22,
-        compression_min_chars=300,
+        window_bytes=2000,
+        min_output_fraction=0.5,
+        compression_ratio=0.15,
     )
     defaults.update(kwargs)
     return ThinkingLoopDetector(**defaults)
 
 
-def test_verbatim_loop():
+_VOCAB = [
+    "quick", "brown", "fox", "lazy", "dog", "river", "mountain", "silver",
+    "bright", "quiet", "ancient", "harbour", "meadow", "galaxy", "telescope",
+    "manuscript", "symphony", "geologist", "conductor", "pruned", "roses",
+    "saplings", "fireflies", "astronomer", "catalogue", "distant", "breeze",
+    "scent", "rain", "valley", "train", "sunrise", "chef", "stew", "herbs",
+    "salt", "wooden", "boat", "drifted", "inscription", "debated", "historian",
+    "limestone", "gorge", "faint", "signal", "detected", "sauce", "delicate",
+    "orchestra", "rehearsed", "evening", "stratified", "language", "nature",
+    "mathematics", "written", "weather", "afternoon", "suddenly", "catalogued",
+]
+
+
+def _varied_text(chunks: int, words: int = 12) -> str:
+    """Genuinely non-repetitive prose (no fixed template, no cycling)."""
+    rng = random.Random(1234)
+    parts = []
+    for _ in range(chunks):
+        parts.append(
+            " ".join(rng.choice(_VOCAB) for _ in range(words)) + ". "
+        )
+    return "".join(parts)
+
+
+def test_repetitive_loop():
     detector = _make()
-    sentences = [
-        "First, let us initialize variable total = 0.",
-        "Next, loop through each element x in the list.",
-        "First, let us initialize variable total = 0.",
-        "Next, loop through each element x in the list.",
-        "First, let us initialize variable total = 0.",
-    ]
-    for sentence in sentences:
-        verdict = detector.feed(sentence)
-        if verdict is not None:
-            assert verdict.kind == "loop", verdict
-            assert "recurrence" in verdict.reason, verdict
-            return
-    raise AssertionError("expected a loop, none detected")
+    verdict = None
+    for _ in range(80):
+        verdict = detector.feed("the cat sat on the mat. ") or verdict
+    if verdict is None:
+        verdict = detector.flush()
+    assert verdict is not None, "expected a loop, none detected"
+    assert verdict.kind == "loop", verdict
+    assert "entropy" in verdict.reason, verdict
 
 
-def test_slight_drift_loop():
+def test_diverse_output_no_loop():
     detector = _make()
-    sentences = [
-        "Let me carefully reconsider whether the total should be "
-        "initialised to zero before the loop begins.",
-        "Let me carefully reconsider whether the count should be "
-        "initialised to zero before the loop begins.",
-        "Let me carefully reconsider whether the sum should be "
-        "initialised to zero before the loop begins.",
-    ]
-    for sentence in sentences:
-        verdict = detector.feed(sentence)
-        if verdict is not None:
-            assert verdict.kind == "loop", verdict
-            return
-    raise AssertionError("expected a drift loop, none detected")
-
-
-def test_no_loop():
-    detector = _make()
-    text = [
-        "The capital of France is Paris.",
-        "Water boils at one hundred degrees Celsius.",
-        "Shakespeare wrote many famous plays.",
-        "Python is a popular programming language.",
-    ]
-    for sentence in text:
-        assert detector.feed(sentence) is None, sentence
+    text = _varied_text(300)
+    # Feed in arbitrary-sized chunks to exercise partial-token accumulation.
+    i = 0
+    while i < len(text):
+        step = (i * 7 + 11) % 40 + 1
+        assert detector.feed(text[i : i + step]) is None
+        i += step
     assert detector.flush() is None
 
 
-def test_partial_chunk_assembly():
-    detector = _make(min_loop_count=1)
+def test_short_output_below_gate_is_never_a_loop():
+    # Below min_output_bytes the detector is not armed: even blatantly
+    # repetitive text must not be flagged while the stream is still warming up.
+    detector = _make(window_bytes=10000, min_output_fraction=0.5)
+    # ~4000 bytes, under the 5000-byte gate.
+    for _ in range(100):
+        assert detector.feed("done — nothing left to vet in this chunk\n") is None
+    assert detector.flush() is None
+
+
+def test_arming_gate():
+    detector = _make(window_bytes=2000, min_output_fraction=0.5)
+    # 400 chars < 1000-byte gate -> not armed yet, repetitive or not.
+    for _ in range(10):
+        assert detector.feed("the cat sat on the mat. ") is None
+    # Cross the gate with more repetition -> now armed and detected.
     verdict = None
-    for _ in range(2):
-        verdict = detector.feed("First, let us initialize vari") or verdict
-        verdict = detector.feed("able total = 0.") or verdict
-    assert verdict is not None, "expected loop after partial chunks"
-    assert verdict.kind == "loop", verdict
+    for _ in range(60):
+        verdict = detector.feed("the cat sat on the mat. ") or verdict
+    if verdict is None:
+        verdict = detector.flush()
+    assert verdict is not None and verdict.kind == "loop", verdict
+
+
+def test_enumeration_of_tool_results_does_not_loop():
+    # Regression: the orchestrator enumerates the 12 vetter replies, many of
+    # which are the identical "done — nothing left to vet in this chunk". That
+    # enumeration is short relative to the window, so it must not trip the
+    # detector (previously it did, via n-gram recurrence).
+    detector = _make(window_bytes=32768, min_output_fraction=0.25)
+    lines = [
+        "1. done — nothing left to vet in this chunk",
+        "2. kept NVIDIA GeForce GTX 1070",
+        "3. done — nothing left to vet in this chunk",
+        "4. done — nothing left to vet in this chunk",
+        "5. kept NVIDIA Quadro RTX 6000",
+        "6. done — nothing left to vet in this chunk",
+        "7. done — nothing left to vet in this chunk",
+        "8. kept NVIDIA GeForce RTX 5060",
+        "9. done — nothing left to vet in this chunk",
+        "10. done — nothing left to vet in this chunk",
+        "11. kept NVIDIA Tesla V100 PCIe 16GB",
+        "12. done — nothing left to vet in this chunk",
+    ]
+    for line in lines:
+        assert detector.feed(line + "\n") is None
+    assert detector.flush() is None
 
 
 def test_reset_clears_state():
-    detector = _make(min_loop_count=1)
-    assert detector.feed("First, let us initialize variable total = 0.") is None
-    # Repeating with history present must loop.
-    verdict = detector.feed("First, let us initialize variable total = 0.")
+    detector = _make(window_bytes=500, min_output_fraction=0.5)
+    verdict = None
+    for _ in range(30):
+        verdict = detector.feed("the cat sat on the mat. ") or verdict
     assert verdict is not None and verdict.kind == "loop"
 
     detector.reset()
-    # After reset, history is gone, so the same sentence must not loop.
-    assert detector.feed("First, let us initialize variable total = 0.") is None
+    # After reset the buffer is empty, so the detector is disarmed again.
+    assert detector.feed("the cat sat on the mat. ") is None
 
 
 def test_compression_ratio_orders_repetition():
@@ -111,44 +150,6 @@ def test_compression_ratio_orders_repetition():
     assert detector._compression_ratio(repetitive) < detector._compression_ratio(
         novel
     )
-
-
-def test_compression_triggers_loop():
-    detector = _make(
-        min_loop_count=1000,  # disable the recurrence signal entirely
-        compression_min_chars=10,
-        compression_ratio=0.5,
-    )
-    verdict = None
-    for _ in range(20):
-        verdict = detector.feed("the cat sat on the mat. ") or verdict
-    if verdict is None:
-        verdict = detector.flush()
-    assert verdict is not None, "expected compression-based loop"
-    assert verdict.kind == "loop", verdict
-    assert "entropy" in verdict.reason, verdict
-
-
-def test_structured_output_does_not_loop():
-    # Regression: a report rendering similarly-formatted rows (prices, region
-    # codes, product names) used to trip the loop detector because the sentence
-    # splitter produced fragments like "eu." and "1." whose single token matched
-    # every other identical fragment. Structured output must not be mistaken for
-    # a repetition loop.
-    #
-    # `_make()` is *stricter* than production (min_loop_count=2, jaccard=0.6 vs
-    # production 3 / 0.65), so passing here guarantees no false positive live.
-    detector = _make()
-    rows = [
-        "1. NVIDIA Quadro GV100 (max 691.2): best candidate 6.eu.0 at 342.7 EUR.",
-        "2. NVIDIA Quadro RTX 4000 (max 225.0): best candidate 3.eu.0 at 153.77 EUR.",
-        "3. NVIDIA Tesla V100 PCIe 32GB (max 711.0): best candidate 1.eu.0 at 596.66 EUR.",
-        "4. NVIDIA RTX A4000 (max 776.0): best candidate 5.eu.0 at 153.77 EUR.",
-        "5. NVIDIA Tesla T4 (max 610.0): best candidate 10.eu.1 at 558.04 EUR.",
-    ]
-    for row in rows:
-        assert detector.feed(row + "\n") is None, row
-    assert detector.flush() is None
 
 
 def _run_all() -> int:

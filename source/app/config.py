@@ -53,26 +53,54 @@ class Settings(BaseSettings):
     # Master switch for the loop-detection feature.
     loop_detection_enabled: bool = True
 
-    # Sliding window size (recent sentences compared against).
-    loop_window_sentences: int = 20
+    # Size of the sliding output window, in bytes, over which repetition is
+    # measured. Approximates an 8192-token output window at ~4 bytes/token.
+    loop_window_bytes: int = 32768
 
-    # Jaccard similarity above which two sentences count as "the same".
-    loop_jaccard_threshold: float = 0.65
+    # Fraction of the output window that must be produced before loop
+    # detection arms. Below this the stream is still "warming up" — e.g. a
+    # model enumerating a short list of near-identical tool results — and is
+    # not treated as a loop. A genuine loop keeps emitting repetitive output
+    # and is caught once it crosses this threshold.
+    loop_min_output_fraction: float = 0.25
 
-    # Number of similar sentences within the window that constitutes a loop.
-    loop_min_loop_count: int = 3
+    # Compression ratio below which the window is considered low-entropy
+    # (repetitive). Lower = more repetition. Tuned low (0.15) so genuine varied
+    # reasoning (~0.24+) stays above it while a verbatim loop (~0.004) trips.
+    loop_compression_ratio: float = 0.15
 
-    # Word n-gram size used for similarity.
-    loop_ngram_size: int = 3
-
-    # Compression ratio below which the window is considered low-entropy.
-    loop_compression_ratio: float = 0.22
-
-    # Minimum window length (chars) before the compression check applies.
-    loop_compression_min_chars: int = 300
-
-    # HTTP status returned to the client when a loop is detected.
+    # HTTP status returned to the client when a loop is detected and every
+    # remediation re-submission (see loop-retry below) has also looped.
     loop_abort_status: int = 502
+
+    # --- Loop remediation (re-submit with varied sampling) -----------
+    # When a loop is detected, rather than aborting immediately the request
+    # is re-submitted with a higher temperature and repeat penalties. A loop
+    # is often a fixed point of the sampler: the same deterministic reasoning
+    # cycle repeats verbatim. Perturbing the sampling breaks the cycle without
+    # changing the prompt. Only *loop* verdicts are remediated — a *stall*
+    # (silent model) is a different failure and is aborted outright.
+    #
+    # Master switch for the loop-retry feature.
+    loop_retry_enabled: bool = True
+
+    # Maximum number of loop re-submissions before giving up and aborting.
+    loop_retry_max_attempts: int = 5
+
+    # By how much to *increase* a sampling parameter the client already
+    # submitted. Model-appropriate sampling is the client's and endpoint's
+    # domain, so bandaid never invents values — it only nudges the client's
+    # own values upward by this delta.
+    loop_retry_increment: float = 0.1
+
+    # Fallback sampling parameters used *only* when the client did not submit
+    # that parameter at all. ``temperature`` (more variety), ``repeat_penalty``
+    # (llama.cpp native) and ``presence_penalty``/``frequency_penalty``
+    # (OpenAI) discourage repeating the tokens/phrases that produced the loop.
+    loop_retry_temperature: float = 1.2
+    loop_retry_repeat_penalty: float = 1.2
+    loop_retry_presence_penalty: float = 0.3
+    loop_retry_frequency_penalty: float = 0.3
 
     # --- Stall detection (silently hung streams) ---------------------
     # Master switch for the stalled-stream detection feature.

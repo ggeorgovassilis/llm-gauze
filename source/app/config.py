@@ -198,6 +198,32 @@ class Settings(BaseSettings):
     # the coasted turn as-is (visible content, no tool call, logged outcome).
     coast_max_attempts: int = 2
 
+    # --- Message-overflow protection (oversized tool results) ---------
+    # Master switch for warning (and optionally truncating) oversized
+    # ``role: "tool"`` results before forwarding the request upstream. A single
+    # huge tool result can silently eat the model's context window; this guard
+    # flags it and reclaims the context (see #15).
+    message_overflow_enabled: bool = True
+
+    # Size threshold, in characters, above which a tool-result message is
+    # treated as oversized. Characters (not bytes) so the trigger and the
+    # truncation prefix share one unit; for ASCII they coincide with bytes.
+    message_overflow_threshold: int = 4096
+
+    # Whether to truncate oversized tool results to a bounded prefix (the
+    # first line, capped at the threshold). When False the full content is
+    # kept and only the warning is prepended — rarely useful, as it just adds
+    # tokens to a message the model already sees.
+    message_overflow_truncate: bool = True
+
+    # Warning text prepended to an oversized tool result, telling the model
+    # the content was too large and to find a workaround.
+    message_overflow_warning: str = (
+        "This tool result is very large and may exceed the model's context "
+        "window; the full result may have been truncated. Find a workaround "
+        "rather than relying on the complete result."
+    )
+
     # --- Tool-call syntax enforcement --------------------------------
     # Master switch for validating assembled tool calls: repair truncated
     # ``function.arguments`` where deterministic, flag the rest without

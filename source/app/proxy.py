@@ -26,6 +26,7 @@ from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
 from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.loop_retry import LoopRetryPolicy
 from app.remediation.nudge import NudgePolicy
+from app.remediation.overflow import MessageOverflowGuard
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.stall import StallDetector
 from app.remediation.think import ThinkContentGuard
@@ -133,6 +134,29 @@ def _client_wants_stream(body: bytes) -> bool:
     if not isinstance(data, dict):
         return False
     return bool(data.get("stream"))
+
+
+def _apply_overflow_guard(body: bytes) -> tuple[list, bytes]:
+    """Trim oversized tool results before forwarding (request-side guard).
+
+    Returns ``(changes, body)``: the recorder change records (empty when nothing
+    was flagged or the feature is disabled) and the possibly-rewritten body.
+    The original bytes are returned untouched when nothing changed, so the
+    caller's Content-Length stays valid.
+    """
+    if not settings.message_overflow_enabled:
+        return [], body
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return [], body
+    if not isinstance(data, dict):
+        return [], body
+    guard = MessageOverflowGuard.from_settings()
+    data, changes = guard.process(data)
+    if not changes:
+        return [], body
+    return changes, json.dumps(data).encode("utf-8")
 
 
 def _extract_stream_chunk(
@@ -407,6 +431,14 @@ class Proxy:
         query = request.url.query
         request_id = uuid.uuid4().hex
 
+        # Request-side guard: trim oversized tool results before forwarding, so
+        # a single runaway ``role: "tool"`` message cannot silently eat the
+        # model's context window. Chat completions only — the only shape that
+        # carries ``messages``.
+        overflow_changes: list = []
+        if _is_chat_completion(url):
+            overflow_changes, body = _apply_overflow_guard(body)
+
         base_entry = {
             "request_id": request_id,
             "method": method,
@@ -414,6 +446,7 @@ class Proxy:
             "query": query,
             "request_headers": dict(request.headers),
             "request_body": _decode(body),
+            "message_overflow": overflow_changes or None,
         }
 
         headers = {
@@ -421,6 +454,14 @@ class Proxy:
             for k, v in request.headers.items()
             if k.lower() not in HOP_BY_HOP_HEADERS
         }
+        if overflow_changes:
+            # The body was rewritten, so any inbound Content-Length is stale;
+            # let httpx recompute it from the actual body (see the streaming
+            # path's comment on the same h11 failure mode).
+            headers = {
+                k: v for k, v in headers.items()
+                if k.lower() != "content-length"
+            }
 
         # Chat completions get the streaming loop-detection path; everything
         # else goes through the buffered forwarder unchanged.

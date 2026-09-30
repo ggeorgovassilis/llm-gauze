@@ -25,6 +25,7 @@ from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.nudge import NudgePolicy
 from app.remediation.overflow import MessageOverflowGuard
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
+from app.remediation.runaway import RunawayReasoningDetector, RunawayReasoningPolicy
 from app.remediation.stall import StallDetector
 from app.remediation.think import ThinkContentGuard
 from app.remediation.tool_call import ToolCallGuard
@@ -46,5 +47,7 @@ __all__ = [
     "NudgePolicy",
     "CoastPolicy",
     "MessageOverflowGuard",
+    "RunawayReasoningDetector",
+    "RunawayReasoningPolicy",
     "ToolCallGuard",
 ]

@@ -28,6 +28,7 @@ from app.remediation.loop_retry import LoopRetryPolicy
 from app.remediation.nudge import NudgePolicy
 from app.remediation.overflow import MessageOverflowGuard
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
+from app.remediation.runaway import RunawayReasoningDetector, RunawayReasoningPolicy
 from app.remediation.stall import StallDetector
 from app.remediation.think import ThinkContentGuard
 from app.remediation.tool_call import ToolCallGuard
@@ -322,11 +323,17 @@ def _abort_error_response(verdict: StreamVerdict) -> Response:
         "stalled": (
             "The model stopped producing output and the request was aborted."
         ),
+        "runaway_reasoning": (
+            "The model kept reasoning without producing an answer and the "
+            "request was aborted."
+        ),
     }.get(kind, f"The stream was aborted ({kind}).")
     status_code = (
         settings.loop_abort_status
         if kind == "loop"
         else settings.stall_abort_status
+        if kind == "stalled"
+        else settings.runaway_reasoning_abort_status
     )
     body = json.dumps(
         {
@@ -643,6 +650,11 @@ class Proxy:
             if settings.coast_detection_enabled
             else None
         )
+        runaway_nudge = (
+            RunawayReasoningPolicy.from_settings()
+            if settings.runaway_reasoning_enabled
+            else None
+        )
 
         loop_retry = (
             LoopRetryPolicy.from_settings() if settings.loop_retry_enabled else None
@@ -650,6 +662,7 @@ class Proxy:
         current_body = body
         nudge_attempt = 0
         coast_attempt = 0
+        runaway_attempt = 0
         loop_retry_attempt = 0
         while True:
             stream_body, _ = _ensure_stream(current_body)
@@ -664,6 +677,23 @@ class Proxy:
                 base_entry,
             )
             if result.response is not None:
+                # A *runaway-reasoning* turn (reasoned without ever answering)
+                # is remediated by re-submitting with a stop-thinking nudge;
+                # varied sampling cannot make a model stop reasoning, but an
+                # explicit instruction can. Capped by a small budget.
+                if (
+                    runaway_nudge is not None
+                    and result.loop_verdict is not None
+                    and result.loop_verdict.kind == "runaway_reasoning"
+                    and runaway_attempt < runaway_nudge.max_attempts
+                ):
+                    resubmitted = runaway_nudge.apply(request_payload)
+                    self._record_runaway_pass(
+                        base_entry, result, runaway_attempt, resubmitted
+                    )
+                    runaway_attempt += 1
+                    current_body = json.dumps(resubmitted).encode("utf-8")
+                    continue
                 # A *loop* (not a stall) can be broken by re-submitting with
                 # varied sampling — a loop is often a fixed point of the
                 # sampler. Stalls are aborted outright (retrying just re-waits
@@ -781,6 +811,11 @@ class Proxy:
 
             thinking = ThinkingLoopDetector.from_settings()
             response = ThinkingLoopDetector.from_settings()
+            runaway = (
+                RunawayReasoningDetector.from_settings()
+                if settings.runaway_reasoning_enabled
+                else None
+            )
 
             try:
                 async with self.client.stream(
@@ -853,8 +888,17 @@ class Proxy:
                                 if stall is not None:
                                     stall.note_token()
 
+                            # Visible content or a tool call means the model
+                            # answered/acted — disarm the runaway watchdog.
+                            if runaway is not None and (
+                                delta_content or delta_tool_calls
+                            ):
+                                runaway.note_content()
+
                             if delta_reasoning:
                                 reasoning += delta_reasoning
+                                if runaway is not None:
+                                    runaway.note_reasoning(delta_reasoning)
                                 verdict = thinking.feed(delta_reasoning)
                                 if verdict is not None:
                                     loop_verdict = verdict
@@ -867,6 +911,10 @@ class Proxy:
                                     loop_verdict = verdict
                                     loop_stream = "response"
                                     break
+                            if runaway is not None and runaway.triggered:
+                                loop_verdict = runaway.verdict()
+                                loop_stream = "reasoning"
+                                break
                     else:
                         error_body = await upstream.aread()
 
@@ -886,20 +934,42 @@ class Proxy:
                 # signal — the model never stopped — so treat it as a loop
                 # regardless of whether the content looked repetitive. This
                 # catches *drift* loops (near-identical but not verbatim)
-                # which the compression-ratio check above misses.
+                # which the compression-ratio check above misses. When the
+                # window was spent *reasoning* with no content or tool calls
+                # at all, it is classified as runaway-reasoning instead (#17),
+                # which gets a stop-thinking nudge rather than varied sampling.
                 if (
                     loop_verdict is None
                     and meta.get("finish_reason") == "length"
                 ):
-                    loop_verdict = StreamVerdict(
-                        kind="loop",
-                        reason=(
-                            "output window exhausted "
-                            "(finish_reason=length)"
-                        ),
-                        details={"finish_reason": "length"},
-                    )
-                    loop_stream = "response"
+                    if (
+                        settings.runaway_reasoning_enabled
+                        and (reasoning or "").strip()
+                        and not (content or "").strip()
+                        and not tool_calls
+                    ):
+                        loop_verdict = StreamVerdict(
+                            kind="runaway_reasoning",
+                            reason=(
+                                "output window exhausted while reasoning "
+                                "(finish_reason=length, no content)"
+                            ),
+                            details={
+                                "finish_reason": "length",
+                                "reasoning_tokens": int(len(reasoning) / 4),
+                            },
+                        )
+                        loop_stream = "reasoning"
+                    else:
+                        loop_verdict = StreamVerdict(
+                            kind="loop",
+                            reason=(
+                                "output window exhausted "
+                                "(finish_reason=length)"
+                            ),
+                            details={"finish_reason": "length"},
+                        )
+                        loop_stream = "response"
             except Exception as exc:  # noqa: BLE001 - capture everything
                 error = {
                     "type": type(exc).__name__,
@@ -948,6 +1018,11 @@ class Proxy:
                     telemetry.incr(
                         "loop_aborts_total", {"stream": loop_stream or "unknown"}
                     )
+                elif loop_verdict.kind == "runaway_reasoning":
+                    telemetry.incr(
+                        "requests_total", {"outcome": "runaway_reasoning_aborted"}
+                    )
+                    telemetry.incr("runaway_reasoning_aborts_total")
                 else:
                     telemetry.incr("requests_total", {"outcome": "stalled"})
                     telemetry.incr("stall_aborts_total")
@@ -1151,6 +1226,36 @@ class Proxy:
                 "streamed": client_wants_stream,
                 "think_cleanup": result.relocate_changes or None,
                 "coast": {"attempt": coast_attempt, "outcome": "triggered"},
+                "diagnosis": None,
+                "duration": result.duration,
+            }
+        )
+
+    def _record_runaway_pass(
+        self,
+        base_entry: dict,
+        result: _StreamResult,
+        runaway_attempt: int,
+        resubmitted_body: dict,
+    ) -> None:
+        """Record a runaway-reasoning turn that triggered a stop-thinking nudge.
+
+        ``resubmitted_body`` is the exact request body sent upstream on the
+        re-submission, so the appended instruction is auditable against the
+        client's original ``request_body`` (already in the entry).
+        """
+        self.recorder.record(
+            {
+                **base_entry,
+                "attempt": result.attempt,
+                "max_attempts": result.max_attempts,
+                "status": result.status,
+                "response_headers": result.resp_headers,
+                "runaway": {
+                    "attempt": runaway_attempt,
+                    "outcome": "triggered",
+                    "resubmitted_body": resubmitted_body,
+                },
                 "diagnosis": None,
                 "duration": result.duration,
             }

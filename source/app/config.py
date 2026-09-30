@@ -198,6 +198,33 @@ class Settings(BaseSettings):
     # the coasted turn as-is (visible content, no tool call, logged outcome).
     coast_max_attempts: int = 2
 
+    # --- Runaway-reasoning detection (thinks endlessly, never answers) ---
+    # Master switch for flagging a turn that keeps emitting reasoning tokens
+    # while never producing visible content — the model "thinks endlessly" and
+    # either trips a proactive token budget or exhausts the output window with
+    # nothing to show (see #17). Distinct from loop (repetitive) and stall
+    # (silent): here tokens flow continuously but never become an answer.
+    runaway_reasoning_enabled: bool = True
+
+    # Reasoning-token budget above which a turn is flagged as runaway, provided
+    # no content (or tool call) has appeared yet. Token count is approximated
+    # at ~4 characters/token (see the loop detector's window comment).
+    runaway_reasoning_token_threshold: int = 2000
+
+    # Re-prompt text appended as a ``user`` message on the re-submitted
+    # request, telling the model to stop analysing and answer now.
+    runaway_reasoning_nudge_text: str = (
+        "Stop thinking and produce your final answer now, without further "
+        "analysis. If the task requires a tool call, make it."
+    )
+
+    # Maximum number of runaway re-submissions before aborting the request.
+    runaway_reasoning_max_attempts: int = 2
+
+    # HTTP status returned to the client when a runaway turn is detected and
+    # every re-submission has also run away.
+    runaway_reasoning_abort_status: int = 502
+
     # --- Message-overflow protection (oversized tool results) ---------
     # Master switch for warning (and optionally truncating) oversized
     # ``role: "tool"`` results before forwarding the request upstream. A single

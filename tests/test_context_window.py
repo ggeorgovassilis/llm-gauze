@@ -4,8 +4,8 @@ Unit tests cover `ContextWindowDetector` classification (body, exception
 message, case-insensitivity, deferral). Integration tests drive the real proxy
 paths (buffered `forward` and `_forward_streaming`) against a mock upstream
 that returns the canonical llama.cpp context-overflow error with a *retryable*
-status — proving the gateway fails fast (one attempt, precise 413) instead of
-retrying a doomed request.
+status — proving the gateway fails fast (one attempt) and passes the upstream's
+error through verbatim instead of retrying a doomed request or translating it.
 
     docker compose exec -T gateway python - < tests/test_context_window.py
 """
@@ -175,7 +175,8 @@ async def _make_request(body: bytes):
 
 
 def test_buffered_forward_fails_fast():
-    """Non-chat path: retryable 500 + context body -> one attempt, 413."""
+    """Non-chat path: retryable 500 + context body -> one attempt, passed
+    through verbatim (upstream status + body) instead of retried."""
     mock = _MockServer(status=500)
     try:
         _configure(mock)
@@ -190,17 +191,17 @@ def test_buffered_forward_fails_fast():
             return await proxy.forward(request, "v1/completions")
 
         resp = asyncio.run(run())
-        assert resp.status_code == 413, (resp.status_code, resp.body)
-        data = json.loads(resp.body)
-        assert data["error"]["type"] == CONTEXT_WINDOW_CODE, data
-        assert "context window" in data["error"]["message"], data
+        assert resp.status_code == 500, (resp.status_code, resp.body)
+        # The upstream's own error is forwarded verbatim, not translated.
+        assert json.loads(resp.body) == _LLAMACPP_ERROR, resp.body
         assert _ContextHandler.requests == 1, _ContextHandler.requests
     finally:
         mock.stop()
 
 
 def test_streaming_fails_fast():
-    """Chat path (HTTP error branch): retryable 500 + context body -> 413."""
+    """Chat path (HTTP error branch): retryable 500 + context body -> passed
+    through verbatim (upstream status + body) instead of retried."""
     mock = _MockServer(status=500)
     try:
         _configure(mock)
@@ -229,10 +230,9 @@ def test_streaming_fails_fast():
             )
 
         resp = asyncio.run(run())
-        assert resp.status_code == 413, (resp.status_code, resp.body)
-        data = json.loads(resp.body)
-        assert data["error"]["type"] == CONTEXT_WINDOW_CODE, data
-        assert data["error"]["details"]["upstream_status"] == 500, data
+        assert resp.status_code == 500, (resp.status_code, resp.body)
+        # The upstream's own error is forwarded verbatim, not translated.
+        assert json.loads(resp.body) == _LLAMACPP_ERROR, resp.body
         assert _ContextHandler.requests == 1, _ContextHandler.requests
     finally:
         mock.stop()

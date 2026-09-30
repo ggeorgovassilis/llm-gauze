@@ -19,6 +19,7 @@ from app.remediation.base import (
     StreamDetector,
     StreamVerdict,
 )
+from app.remediation.coast import CoastPolicy
 from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
 from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.nudge import NudgePolicy
@@ -42,5 +43,6 @@ __all__ = [
     "CONTEXT_WINDOW_CODE",
     "ThinkContentGuard",
     "NudgePolicy",
+    "CoastPolicy",
     "ToolCallGuard",
 ]

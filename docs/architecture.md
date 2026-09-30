@@ -165,9 +165,13 @@ the retry decision:
   of exact, case-insensitive substrings (`CONTEXT_WINDOW_MARKERS`). Exact
   matching keeps it free of false positives — no fuzzy heuristics.
 - A match produces `Diagnosis(retryable=False, code="context_window_exceeded")`,
-  which short-circuits the retry loop and returns a precise
-  `context_window_abort_status` error (default 413 Payload Too Large) with a
-  named `context_window_exceeded` body instead of a generic 502.
+  which short-circuits the retry loop. The upstream's own error is then
+  forwarded **verbatim** (its status and body — token count, `n_ctx`, fix
+  hints — are passed through unchanged) rather than translated into a bandaid
+  message. Only when no upstream body is available (e.g. the overflow arrived
+  as an exception message) does bandaid synthesise a minimal named
+  `context_window_exceeded` error with `context_window_abort_status` (default
+  413).
 - The detector inspects both the buffered forward path (response body) and the
   streaming path (error body / transport exception), so both request shapes
   fail fast on a full context window.

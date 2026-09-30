@@ -139,7 +139,9 @@ class Settings(BaseSettings):
     )
 
     # HTTP status returned to the client when a context-window overflow is
-    # recognised (413 Payload Too Large: the request cannot fit the model).
+    # recognised but no upstream body is available to pass through (e.g. the
+    # overflow arrived as an exception message). When the upstream returned a
+    # body, its own status and body are forwarded verbatim instead.
     context_window_abort_status: int = 413
 
     # --- Think-tag cleanup -------------------------------------------
@@ -174,6 +176,27 @@ class Settings(BaseSettings):
     # Maximum number of nudge re-submissions before falling back to the
     # placeholder floor (see ``think_empty_response_placeholder``).
     think_nudge_max_attempts: int = 2
+
+    # --- Coast detection (announced-but-absent tool call) -------------
+    # Master switch for re-submitting a turn that produced non-empty visible
+    # content but no tool call, even though a tool call was possible (the
+    # request carried ``tools`` and the model had already been driving a tool
+    # loop) and the model's reasoning collapsed to be byte-identical with its
+    # visible content. This is the "silent workflow stop" described in #16:
+    # the model regurgitated its status line instead of generating the call.
+    coast_detection_enabled: bool = True
+
+    # Re-prompt text appended as a ``user`` message on the re-submitted
+    # request. The coasted assistant turn is replayed immediately before it so
+    # the re-prompt refers to something the model actually said.
+    coast_nudge_text: str = (
+        "You announced a tool call but did not make one. "
+        "Call the tool now, or if the task is complete, say so explicitly."
+    )
+
+    # Maximum number of coast re-submissions before giving up and returning
+    # the coasted turn as-is (visible content, no tool call, logged outcome).
+    coast_max_attempts: int = 2
 
     # --- Tool-call syntax enforcement --------------------------------
     # Master switch for validating assembled tool calls: repair truncated

@@ -21,6 +21,7 @@ from fastapi.responses import Response
 from app.config import settings
 from app.recorder import Recorder
 from app.remediation.base import RetryPolicy, StreamVerdict
+from app.remediation.coast import CoastPolicy
 from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
 from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.loop_retry import LoopRetryPolicy
@@ -321,14 +322,29 @@ def _abort_error_response(verdict: StreamVerdict) -> Response:
 
 
 def _context_window_error_response(
-    status: int | None, diagnosis
+    status: int | None,
+    body: bytes | None,
+    headers: dict | None,
+    diagnosis,
 ) -> Response:
-    """Build the client-facing response for a context-window overflow.
+    """Pass through the upstream's context-window overflow response verbatim.
 
     The upstream told us the request cannot fit its context window; retrying
-    cannot help, so surface a precise, named error instead of a generic 502.
+    cannot help, so we stop retrying. But the upstream's own error body carries
+    exactly what the user needs to see — the token count, ``n_ctx``, and how to
+    fix it — so we forward it unchanged rather than translating it into our own
+    message. Only when there is no upstream body to forward (e.g. the overflow
+    arrived as an exception message) do we synthesise a minimal named error.
     """
-    body = json.dumps(
+    if body:
+        filtered_headers, ctype = _filtered_headers(headers or {})
+        return Response(
+            content=body,
+            status_code=status or settings.context_window_abort_status,
+            headers=filtered_headers,
+            media_type=ctype or "application/json",
+        )
+    synthesized = json.dumps(
         {
             "error": {
                 "message": "context window exceeded",
@@ -339,7 +355,7 @@ def _context_window_error_response(
         }
     ).encode("utf-8")
     return Response(
-        content=body,
+        content=synthesized,
         status_code=settings.context_window_abort_status,
         media_type="application/json",
     )
@@ -499,7 +515,9 @@ class Proxy:
                     "requests_total", {"outcome": "context_window_exceeded"}
                 )
                 telemetry.incr("context_window_aborts_total")
-                return _context_window_error_response(status, diagnosis)
+                return _context_window_error_response(
+                    status, resp_body, resp_headers, diagnosis
+                )
 
             if status is None:
                 final_status = 502
@@ -579,15 +597,22 @@ class Proxy:
             if settings.think_cleanup_enabled
             else None
         )
+        coast = (
+            CoastPolicy.from_settings()
+            if settings.coast_detection_enabled
+            else None
+        )
 
         loop_retry = (
             LoopRetryPolicy.from_settings() if settings.loop_retry_enabled else None
         )
         current_body = body
         nudge_attempt = 0
+        coast_attempt = 0
         loop_retry_attempt = 0
         while True:
             stream_body, _ = _ensure_stream(current_body)
+            request_payload = json.loads(current_body)
             result = await self._stream_once(
                 request_id,
                 method,
@@ -608,7 +633,7 @@ class Proxy:
                     and result.loop_verdict.kind == "loop"
                     and loop_retry_attempt < loop_retry.max_attempts
                 ):
-                    resubmitted = loop_retry.apply(json.loads(current_body))
+                    resubmitted = loop_retry.apply(request_payload)
                     self._record_loop_retry_pass(
                         base_entry, result, loop_retry_attempt, resubmitted
                     )
@@ -632,7 +657,28 @@ class Proxy:
                 )
                 nudge_attempt += 1
                 current_body = json.dumps(
-                    nudge.apply(json.loads(current_body))
+                    nudge.apply(request_payload)
+                ).encode("utf-8")
+                continue
+
+            coast_turn = bool(
+                coast is not None
+                and coast.should_nudge(
+                    result.finish_reason,
+                    result.content,
+                    result.tool_calls,
+                    result.reasoning,
+                    request_payload.get("tools"),
+                    request_payload.get("messages"),
+                )
+            )
+            if coast_turn and coast_attempt < coast.max_attempts:
+                self._record_coast_pass(
+                    base_entry, result, client_wants_stream, coast_attempt
+                )
+                coast_attempt += 1
+                current_body = json.dumps(
+                    coast.apply(request_payload, result.content)
                 ).encode("utf-8")
                 continue
 
@@ -641,6 +687,13 @@ class Proxy:
                 nudge_outcome = "exhausted"
             elif nudge_attempt > 0:
                 nudge_outcome = "succeeded"
+
+            coast_outcome = None
+            if coast_turn:
+                coast_outcome = "exhausted"
+            elif coast_attempt > 0:
+                coast_outcome = "succeeded"
+
             return self._finalize_success(
                 base_entry,
                 result,
@@ -648,6 +701,8 @@ class Proxy:
                 client_wants_stream,
                 nudge_attempt,
                 nudge_outcome,
+                coast_attempt,
+                coast_outcome,
             )
 
     async def _stream_once(
@@ -892,7 +947,9 @@ class Proxy:
                     )
                     telemetry.incr("context_window_aborts_total")
                     return _StreamResult(
-                        response=_context_window_error_response(status, diagnosis)
+                        response=_context_window_error_response(
+                            status, error_body, resp_headers, diagnosis
+                        )
                     )
                 if policy.should_retry(diagnosis, attempt):
                     delay = policy.backoff.delay(attempt)
@@ -941,7 +998,9 @@ class Proxy:
                     )
                     telemetry.incr("context_window_aborts_total")
                     return _StreamResult(
-                        response=_context_window_error_response(status, diagnosis)
+                        response=_context_window_error_response(
+                            status, error_body, resp_headers, diagnosis
+                        )
                     )
                 if policy.should_retry(diagnosis, attempt):
                     delay = policy.backoff.delay(attempt)
@@ -1027,6 +1086,35 @@ class Proxy:
             }
         )
 
+    def _record_coast_pass(
+        self,
+        base_entry: dict,
+        result: _StreamResult,
+        client_wants_stream: bool,
+        coast_attempt: int,
+    ) -> None:
+        """Record a coasted turn that triggered a re-prompt re-submission."""
+        final_body = json.dumps(
+            _reconstruct_chat_completion(
+                result.meta, result.content, result.reasoning, result.tool_calls
+            )
+        ).encode("utf-8")
+        self.recorder.record(
+            {
+                **base_entry,
+                "attempt": result.attempt,
+                "max_attempts": result.max_attempts,
+                "status": result.status,
+                "response_headers": result.resp_headers,
+                "response_body": _decode(final_body),
+                "streamed": client_wants_stream,
+                "think_cleanup": result.relocate_changes or None,
+                "coast": {"attempt": coast_attempt, "outcome": "triggered"},
+                "diagnosis": None,
+                "duration": result.duration,
+            }
+        )
+
     def _record_loop_retry_pass(
         self,
         base_entry: dict,
@@ -1065,6 +1153,8 @@ class Proxy:
         client_wants_stream: bool,
         nudge_attempt: int,
         nudge_outcome: str | None,
+        coast_attempt: int,
+        coast_outcome: str | None,
     ) -> Response:
         """Apply the placeholder floor, record, and return the final response."""
         content = result.content
@@ -1092,6 +1182,10 @@ class Proxy:
         if nudge_outcome is not None:
             nudge_entry = {"attempts": nudge_attempt, "outcome": nudge_outcome}
 
+        coast_entry = None
+        if coast_outcome is not None:
+            coast_entry = {"attempts": coast_attempt, "outcome": coast_outcome}
+
         self.recorder.record(
             {
                 **base_entry,
@@ -1104,6 +1198,7 @@ class Proxy:
                 "think_cleanup": cleanup_changes or None,
                 "tool_repair": tool_changes or None,
                 "nudge": nudge_entry,
+                "coast": coast_entry,
                 "diagnosis": None,
                 "duration": result.duration,
             }

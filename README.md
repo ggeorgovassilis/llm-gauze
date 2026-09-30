@@ -75,14 +75,14 @@ tokens, never on SSE keepalives):
 - `STALL_ABORT_STATUS` — HTTP status returned when a stall is detected.
 
 Context-window overflow (the upstream's context-window-fill error is matched
-by exact substring and failed fast with a `context_window_exceeded` error
-instead of being retried):
+by exact substring and failed fast instead of being retried; the upstream's
+own error is forwarded verbatim):
 
 - `CONTEXT_WINDOW_DETECTION_ENABLED` — master switch for context-window detection.
 - `CONTEXT_WINDOW_MARKERS` — comma-separated substrings (case-insensitive) that
   signal a full context window.
 - `CONTEXT_WINDOW_ABORT_STATUS` — HTTP status returned when an overflow is
-  recognised (default 413).
+  recognised but no upstream body is available to pass through (default 413).
 
 Think-tag cleanup (leaked `<think>`/`<reasoning>` tags are relocated out of the
 visible content into `reasoning_content` — never discarded — and a non-empty

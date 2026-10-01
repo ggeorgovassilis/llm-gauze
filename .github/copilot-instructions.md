@@ -11,6 +11,7 @@ This project is an LLM gateway that detects and remediates shortcommings of loca
 - When asked to come up with a plan, formulate the plan in self-contained phases. Each phase delivers one thing and has clear acceptance criteria.
 - When the user asks you to "commit", they mean commit to github (with a concise message) and push.
 - When the user asks you to list tickets, use the `gh` tool to list open repository issues. Group them by milestone (`current` first, `backlog` last). Make the ticket ID clickable with a link to the github issue.
+- Everytime you reference a github ticket, mention the ticket ID and make it a link that takes you to the github issue. 
 
 # Project tech
 - Python in docker

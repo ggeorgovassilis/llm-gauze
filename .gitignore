@@ -1,5 +1,7 @@
 # Secrets / local config
 .env
+.env.*
+!.env.example
 
 # Runtime data
 /data/
@@ -12,3 +14,16 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 models.ini
+
+# Coverage / test artifacts
+.coverage
+.coverage.*
+htmlcov/
+
+# Logs
+*.log
+
+# OS / editor cruft
+.DS_Store
+.idea/
+.vscode/

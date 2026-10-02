@@ -69,6 +69,10 @@ remediates what it can — varied-sampling retries, nudge re-prompts, think-tag
 cleanup, tool-call repair. See [`docs/architecture.md`](docs/architecture.md)
 for the full design.
 
+For a walk-through of each remediation with worked examples and a sequence
+diagram of the client → bandaid → LLM interaction, see
+[`docs/examples.md`](docs/examples.md).
+
 ## Developing
 
 See [`DEVELOPING.md`](DEVELOPING.md) for local development, running the tests,

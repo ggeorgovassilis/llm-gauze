@@ -1,0 +1,8 @@
+[tool.pytest.ini_options]
+# Collect tests from tests/ and make the `app` package (under source/) importable.
+# `pythonpath` resolves relative to the repo root locally, and relative to /app in
+# the test image (where source/ is copied as a directory), so the same config
+# works in both environments.
+testpaths = ["tests"]
+pythonpath = ["source"]
+addopts = "-q"

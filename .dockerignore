@@ -1,0 +1,11 @@
+# Keep the build context small and free of local/runtime artifacts.
+.git
+.github
+.env
+.env.*
+data/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+*.jsonl
+chat.json

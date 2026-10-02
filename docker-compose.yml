@@ -2,6 +2,7 @@ services:
   gateway:
     build:
       context: .
+      target: runtime
     # Run as the host user (UID/GID, default 1000) so files written to the
     # bind-mounted volumes (data/, and __pycache__ under source/) are owned by
     # the developer, not root, and can be deleted/rotated without sudo.
@@ -22,3 +23,18 @@ services:
       - ./source:/app
       - ./data:/data
     restart: unless-stopped
+
+  # Test image + suite: the same environment CI runs (Option 3, docker all the
+  # way). Run with `./scripts/test.sh`, or `docker compose run --rm test pytest`.
+  test:
+    build:
+      context: .
+      target: test
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+    volumes:
+      # Mount source and tests for fast iteration; the image's pyproject.toml
+      # keeps `pythonpath = ["source"]` resolving correctly.
+      - ./source:/app/source
+      - ./tests:/app/tests
+    command: pytest

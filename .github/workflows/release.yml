@@ -26,8 +26,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Create and push tag
+        env:
+          # A PAT (not GITHUB_TOKEN) is required: a tag pushed with the default
+          # GITHUB_TOKEN does not trigger the `Publish` workflow (GitHub blocks
+          # GITHUB_TOKEN from spawning downstream workflow runs).
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${{ github.repository }}.git"
           git tag "v${{ inputs.version }}"
           git push origin "v${{ inputs.version }}"

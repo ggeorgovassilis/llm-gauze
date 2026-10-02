@@ -4,7 +4,7 @@ Bandaid is an HTTP gateway that sits in front of a local LLM (served via an
 OpenAI-compatible API) and works around its shortcomings: transient errors
 without retries, silently hung or looping models, empty or sloppy responses,
 context-window overflows, runaway reasoning, and malformed tool calls. It
-records every exchange and remediates what it can before the client ever sees
+logs every exchange and remediates what it can before the client ever sees
 it.
 
 ## Quick start
@@ -68,7 +68,7 @@ Bandaid sits between your client and the local LLM, recording every exchange:
 flowchart LR
     Client[Your client] -->|OpenAI-compatible API| Bandaid
     Bandaid -->|forwards| LLM[Local LLM]
-    Bandaid -.->|records every exchange| Store[(data/*.jsonl)]
+    Bandaid -.->|logs every exchange| Store[(data/*.jsonl)]
 ```
 
 When the model misbehaves, bandaid detects it and remediates what it can before
@@ -82,10 +82,10 @@ sequenceDiagram
     participant L as Local LLM
 
     C->>B: POST /v1/chat/completions
-    B->>L: forward (stream)
-    L-->>B: "The answer is 42. The answer is 42. …"
-    B->>B: loop detected
-    B->>L: re-submit with varied sampling
+    B->>L: forward
+    L-->>B: error, hang, loop, or sloppy reply
+    B->>B: detect & classify
+    B->>L: remediate (retry / nudge / repair)
     L-->>B: clean completion
     B-->>C: chat.completion
 ```

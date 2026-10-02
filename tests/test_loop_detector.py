@@ -32,15 +32,67 @@ def _make(**kwargs) -> ThinkingLoopDetector:
 
 
 _VOCAB = [
-    "quick", "brown", "fox", "lazy", "dog", "river", "mountain", "silver",
-    "bright", "quiet", "ancient", "harbour", "meadow", "galaxy", "telescope",
-    "manuscript", "symphony", "geologist", "conductor", "pruned", "roses",
-    "saplings", "fireflies", "astronomer", "catalogue", "distant", "breeze",
-    "scent", "rain", "valley", "train", "sunrise", "chef", "stew", "herbs",
-    "salt", "wooden", "boat", "drifted", "inscription", "debated", "historian",
-    "limestone", "gorge", "faint", "signal", "detected", "sauce", "delicate",
-    "orchestra", "rehearsed", "evening", "stratified", "language", "nature",
-    "mathematics", "written", "weather", "afternoon", "suddenly", "catalogued",
+    "quick",
+    "brown",
+    "fox",
+    "lazy",
+    "dog",
+    "river",
+    "mountain",
+    "silver",
+    "bright",
+    "quiet",
+    "ancient",
+    "harbour",
+    "meadow",
+    "galaxy",
+    "telescope",
+    "manuscript",
+    "symphony",
+    "geologist",
+    "conductor",
+    "pruned",
+    "roses",
+    "saplings",
+    "fireflies",
+    "astronomer",
+    "catalogue",
+    "distant",
+    "breeze",
+    "scent",
+    "rain",
+    "valley",
+    "train",
+    "sunrise",
+    "chef",
+    "stew",
+    "herbs",
+    "salt",
+    "wooden",
+    "boat",
+    "drifted",
+    "inscription",
+    "debated",
+    "historian",
+    "limestone",
+    "gorge",
+    "faint",
+    "signal",
+    "detected",
+    "sauce",
+    "delicate",
+    "orchestra",
+    "rehearsed",
+    "evening",
+    "stratified",
+    "language",
+    "nature",
+    "mathematics",
+    "written",
+    "weather",
+    "afternoon",
+    "suddenly",
+    "catalogued",
 ]
 
 
@@ -49,9 +101,7 @@ def _varied_text(chunks: int, words: int = 12) -> str:
     rng = random.Random(1234)
     parts = []
     for _ in range(chunks):
-        parts.append(
-            " ".join(rng.choice(_VOCAB) for _ in range(words)) + ". "
-        )
+        parts.append(" ".join(rng.choice(_VOCAB) for _ in range(words)) + ". ")
     return "".join(parts)
 
 
@@ -147,9 +197,7 @@ def test_compression_ratio_orders_repetition():
         "the cat sat on the mat. a dog barked loudly in the night. "
         "the sun rose over the quiet hills. many birds flew across the sky."
     )
-    assert detector._compression_ratio(repetitive) < detector._compression_ratio(
-        novel
-    )
+    assert detector._compression_ratio(repetitive) < detector._compression_ratio(novel)
 
 
 def _run_all() -> int:

@@ -33,24 +33,14 @@ class LoopRetryPolicy:
         frequency_penalty: float | None = None,
     ) -> None:
         self.max_attempts = (
-            max_attempts
-            if max_attempts is not None
-            else settings.loop_retry_max_attempts
+            max_attempts if max_attempts is not None else settings.loop_retry_max_attempts
         )
-        self.increment = (
-            increment
-            if increment is not None
-            else settings.loop_retry_increment
-        )
+        self.increment = increment if increment is not None else settings.loop_retry_increment
         self.temperature = (
-            temperature
-            if temperature is not None
-            else settings.loop_retry_temperature
+            temperature if temperature is not None else settings.loop_retry_temperature
         )
         self.repeat_penalty = (
-            repeat_penalty
-            if repeat_penalty is not None
-            else settings.loop_retry_repeat_penalty
+            repeat_penalty if repeat_penalty is not None else settings.loop_retry_repeat_penalty
         )
         self.presence_penalty = (
             presence_penalty

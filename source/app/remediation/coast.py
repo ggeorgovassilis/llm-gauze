@@ -62,9 +62,7 @@ class CoastPolicy:
     ) -> None:
         self.text = text if text is not None else settings.coast_nudge_text
         self.max_attempts = (
-            max_attempts
-            if max_attempts is not None
-            else settings.coast_max_attempts
+            max_attempts if max_attempts is not None else settings.coast_max_attempts
         )
 
     @classmethod

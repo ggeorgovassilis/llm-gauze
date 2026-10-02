@@ -51,17 +51,11 @@ class ContextWindowDetector(Detector):
         markers: tuple[str, ...] | None = None,
     ) -> None:
         self.fallback = fallback
-        self.markers = tuple(
-            m.lower() for m in (markers or _DEFAULT_MARKERS)
-        )
+        self.markers = tuple(m.lower() for m in (markers or _DEFAULT_MARKERS))
 
     @classmethod
     def from_settings(cls, fallback: Detector) -> "ContextWindowDetector":
-        markers = tuple(
-            s.strip()
-            for s in settings.context_window_markers.split(",")
-            if s.strip()
-        )
+        markers = tuple(s.strip() for s in settings.context_window_markers.split(",") if s.strip())
         return cls(fallback, markers or _DEFAULT_MARKERS)
 
     def matches(self, text: str) -> bool:
@@ -82,9 +76,7 @@ class ContextWindowDetector(Detector):
             return self._overflow()
         return self.fallback.diagnose_exception(exc)
 
-    def diagnose_status(
-        self, status: int, body: bytes | None = None
-    ) -> Diagnosis:
+    def diagnose_status(self, status: int, body: bytes | None = None) -> Diagnosis:
         if self.matches(_decode(body)):
             return self._overflow()
         return self.fallback.diagnose_status(status, body)

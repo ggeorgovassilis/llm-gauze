@@ -24,8 +24,8 @@ def test_counter_increment_and_labels():
     t.incr("requests_total", {"outcome": "success"})
     t.incr("requests_total", {"outcome": "loop_aborted"})
     snap = t.snapshot()["counters"]
-    assert snap["requests_total"]["outcome=\"success\""] == 2
-    assert snap["requests_total"]["outcome=\"loop_aborted\""] == 1
+    assert snap["requests_total"]['outcome="success"'] == 2
+    assert snap["requests_total"]['outcome="loop_aborted"'] == 1
 
 
 def test_unlabelled_counter_is_scalar():

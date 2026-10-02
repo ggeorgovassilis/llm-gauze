@@ -95,19 +95,14 @@ class Telemetry:
                 out[name] = buckets[()]
             else:
                 out[name] = {
-                    _fmt_labels(dict(labels)): value
-                    for labels, value in sorted(buckets.items())
+                    _fmt_labels(dict(labels)): value for labels, value in sorted(buckets.items())
                 }
         return out
 
     def snapshot(self) -> dict:
         """Structured dict for the JSON exposition."""
         with self._lock:
-            mean = (
-                self._latency_sum / self._latency_count
-                if self._latency_count
-                else 0.0
-            )
+            mean = self._latency_sum / self._latency_count if self._latency_count else 0.0
             return {
                 "uptime_seconds": round(time.time() - self._started, 3),
                 "counters": self._counters_snapshot(),
@@ -134,16 +129,12 @@ class Telemetry:
                     buckets = dict(self._latency_buckets)
                     total = self._latency_count
                     for upper in _LATENCY_BUCKETS:
-                        lines.append(
-                            f'{name}_bucket{{le="{upper:g}"}} {buckets.get(upper, 0)}'
-                        )
+                        lines.append(f'{name}_bucket{{le="{upper:g}"}} {buckets.get(upper, 0)}')
                     lines.append(f'{name}_bucket{{le="+Inf"}} {total}')
                     lines.append(f"{name}_sum {self._latency_sum}")
                     lines.append(f"{name}_count {total}")
                 elif name == "upstream_down":
-                    lines.append(
-                        f"upstream_down {1 if self._upstream_down else 0}"
-                    )
+                    lines.append(f"upstream_down {1 if self._upstream_down else 0}")
                 else:
                     buckets = self._counters.get(name, {})
                     if not buckets:
@@ -151,9 +142,7 @@ class Telemetry:
                     else:
                         for labels, value in sorted(buckets.items()):
                             if labels:
-                                lines.append(
-                                    f'{name}{{{_fmt_labels(dict(labels))}}} {value}'
-                                )
+                                lines.append(f"{name}{{{_fmt_labels(dict(labels))}}} {value}")
                             else:
                                 lines.append(f"{name} {value}")
         return "\n".join(lines) + "\n"

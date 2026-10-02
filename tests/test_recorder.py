@@ -50,10 +50,10 @@ def test_existing_file_is_rotated_on_restart():
 
         # Rotated file holds run one; fresh file holds run two only.
         rotated_path = Path(tmp) / rotated[0]
-        lines = [json.loads(l) for l in rotated_path.read_text().splitlines()]
+        lines = [json.loads(line) for line in rotated_path.read_text().splitlines()]
         assert [r["run"] for r in lines] == ["one"]
 
-        fresh_lines = [json.loads(l) for l in path.read_text().splitlines()]
+        fresh_lines = [json.loads(line) for line in path.read_text().splitlines()]
         assert [r["run"] for r in fresh_lines] == ["two"]
 
 

@@ -25,8 +25,6 @@ schema (see #13 for AI-assisted extraction).
 
 import json
 
-from app.config import settings
-
 
 def _drop_trailing_comma(out: list[str]) -> None:
     """Drop a trailing comma (and surrounding whitespace) before a closer.

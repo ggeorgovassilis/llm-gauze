@@ -36,8 +36,9 @@ Tests run inside Docker — the same environment CI uses:
 ./scripts/test.sh
 ```
 
-This builds the `test` target of `docker-compose.dev.yml` and runs `pytest`. To
-run a subset or pass arguments through:
+This builds the `test` target of `docker-compose.dev.yml` and runs the full
+check suite: `ruff check`, `ruff format --check`, `mypy`, then `pytest`. To run
+a subset or pass arguments through (they are forwarded to `pytest`):
 
 ```bash
 ./scripts/test.sh tests/test_loop_detector.py
@@ -45,7 +46,8 @@ run a subset or pass arguments through:
 ```
 
 The test runner is `pytest` (pinned in `requirements-dev.txt`); config lives in
-`pyproject.toml` (`testpaths = ["tests"]`, `pythonpath = ["source"]`).
+`pyproject.toml` (`testpaths = ["tests"]`, `pythonpath = ["source"]`). Lint and
+type-check config (`ruff`, `mypy`) also lives in `pyproject.toml`.
 
 Tests use an in-process mock OpenAI-compatible upstream (`http.server` in the
 `*_integration.py` files) — never a real LLM, which is non-deterministic and

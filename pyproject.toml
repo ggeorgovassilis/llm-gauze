@@ -5,7 +5,7 @@
 # works in both environments.
 testpaths = ["tests"]
 pythonpath = ["source"]
-addopts = "-q"
+addopts = "-q --cov=app --cov-report=term-missing"
 
 [tool.ruff]
 # Lint + format + import sorting in one tool (ruff subsumes isort/black).
@@ -25,3 +25,20 @@ python_version = "3.12"
 warn_unused_configs = true
 warn_redundant_casts = true
 check_untyped_defs = true
+
+[tool.coverage.run]
+# Measure the application under test, never the test files themselves.
+source = ["app"]
+
+[tool.coverage.report]
+# Fail the suite below this line-coverage floor (see test audit, #39).
+# Measured 89% when the floor was introduced; keep headroom for small,
+# coverage-neutral refactors while still catching real regressions.
+fail_under = 85
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]

@@ -14,27 +14,18 @@ no-op.
 
 import asyncio
 import json
-import threading
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from app.config import settings
 from app.proxy import Proxy
 from app.recorder import Recorder
 from app.remediation.coast import CoastPolicy
+from mock_upstream import MockUpstream, chunk, settings_override
 
 _COAST_TEXT = "PLEASE_MAKE_THE_TOOL_CALL"
 _COASTED_CONTENT = "Chunk 5 done: 12 products, 0 picks. Pulling next chunk."
 
 
-def _chunk(delta: dict, finish_reason=None) -> dict:
-    return {
-        "id": "chatcmpl-coast",
-        "object": "chat.completion.chunk",
-        "created": 1,
-        "model": "test",
-        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
-    }
+_chunk = chunk
 
 
 # A coasted turn: stop, non-empty content, no tool calls, reasoning == content.
@@ -211,81 +202,49 @@ def test_apply_replays_coast_turn_and_appends_nudge():
 # --- integration harness ---------------------------------------------
 
 
-class _MockHandler(BaseHTTPRequestHandler):
-    chunks_by_request: list = []
-    requests = 0
-
-    def do_POST(self):
-        idx = min(type(self).requests, len(type(self).chunks_by_request) - 1)
-        type(self).requests += 1
-        chunks = type(self).chunks_by_request[idx]
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.end_headers()
-        for chunk in chunks:
-            try:
-                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                break
-
-    def log_message(self, *args):  # silence request logging
-        pass
-
-
-class _MockServer:
-    def __init__(self, chunks_by_request):
-        self.server = HTTPServer(("127.0.0.1", 0), _MockHandler)
-        _MockHandler.chunks_by_request = chunks_by_request
-        _MockHandler.requests = 0
-        self.port = self.server.server_address[1]
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-
-    def stop(self):
-        self.server.shutdown()
-
-
 def _run_forward(chunks_by_request, coast_max=2, enabled=True):
-    mock = _MockServer(chunks_by_request)
-    try:
-
-        async def run():
-            settings.llm_base_url = f"http://127.0.0.1:{mock.port}"
-            settings.loop_detection_enabled = True
-            settings.think_cleanup_enabled = True
-            settings.think_nudge_enabled = False
-            settings.coast_detection_enabled = enabled
-            settings.coast_nudge_text = _COAST_TEXT
-            settings.coast_max_attempts = coast_max
+    specs = [{"chunks": turn} for turn in chunks_by_request]
+    with MockUpstream(specs) as mock:
+        with settings_override(
+            llm_base_url=mock.url,
+            loop_detection_enabled=True,
+            think_cleanup_enabled=True,
+            think_nudge_enabled=False,
+            coast_detection_enabled=enabled,
+            coast_nudge_text=_COAST_TEXT,
+            coast_max_attempts=coast_max,
+        ):
             recorder = Recorder("/tmp/coast_integration.jsonl")
             proxy = Proxy(recorder)
             body = json.dumps(_loop_request()).encode()
-            resp = await proxy._forward_streaming(
-                request_id="coast-itest",
-                method="POST",
-                url="/v1/chat/completions",
-                query="",
-                body=body,
-                headers={"content-type": "application/json"},
-                base_entry={
-                    "request_id": "coast-itest",
-                    "method": "POST",
-                    "path": "/v1/chat/completions",
-                },
-            )
-            records = [
-                json.loads(line) for line in open("/tmp/coast_integration.jsonl") if line.strip()
-            ]
-            return resp, records
 
-        return asyncio.run(run())
-    finally:
-        mock.stop()
+            async def run():
+                resp = await proxy._forward_streaming(
+                    request_id="coast-itest",
+                    method="POST",
+                    url="/v1/chat/completions",
+                    query="",
+                    body=body,
+                    headers={"content-type": "application/json"},
+                    base_entry={
+                        "request_id": "coast-itest",
+                        "method": "POST",
+                        "path": "/v1/chat/completions",
+                    },
+                )
+                records = [
+                    json.loads(line)
+                    for line in open("/tmp/coast_integration.jsonl")
+                    if line.strip()
+                ]
+                return resp, records
+
+            resp, records = asyncio.run(run())
+            return resp, records, mock.request_count
 
 
 def test_coasted_turn_is_reprompted_and_returns_tool_call():
-    resp, records = _run_forward([_COAST_TURN, _TOOL_CALL_TURN], coast_max=2)
+    resp, records, count = _run_forward([_COAST_TURN, _TOOL_CALL_TURN], coast_max=2)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     message = data["choices"][0]["message"]
@@ -293,7 +252,7 @@ def test_coasted_turn_is_reprompted_and_returns_tool_call():
     assert message["tool_calls"][0]["function"]["name"] == "next_chunk", message
 
     # Two upstream requests: the coasted turn and the re-prompted retry.
-    assert _MockHandler.requests == 2, _MockHandler.requests
+    assert count == 2, count
     final = records[-1]
     assert final["coast"] == {"attempts": 1, "outcome": "succeeded"}, final
     triggered = [r for r in records if r.get("coast", {}).get("outcome") == "triggered"]
@@ -301,24 +260,24 @@ def test_coasted_turn_is_reprompted_and_returns_tool_call():
 
 
 def test_coast_budget_exhausted_returns_coasted_turn():
-    resp, records = _run_forward([_COAST_TURN, _COAST_TURN, _COAST_TURN], coast_max=2)
+    resp, records, count = _run_forward([_COAST_TURN, _COAST_TURN, _COAST_TURN], coast_max=2)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     message = data["choices"][0]["message"]
     # No tool call — the rung gave up and returned the coasted turn as-is.
     assert not message.get("tool_calls"), message
-    assert _MockHandler.requests == 3, _MockHandler.requests
+    assert count == 3, count
     final = records[-1]
     assert final["coast"] == {"attempts": 2, "outcome": "exhausted"}, final
 
 
 def test_coast_disabled_is_noop():
-    resp, records = _run_forward([_COAST_TURN], coast_max=2, enabled=False)
+    resp, records, count = _run_forward([_COAST_TURN], coast_max=2, enabled=False)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     message = data["choices"][0]["message"]
     assert not message.get("tool_calls"), message
-    assert _MockHandler.requests == 1, _MockHandler.requests
+    assert count == 1, count
     assert not records[-1].get("coast"), records[-1]
 
 

@@ -12,11 +12,8 @@ error through verbatim instead of retrying a doomed request or translating it.
 
 import asyncio
 import json
-import threading
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from app.config import settings
 from app.proxy import Proxy
 from app.recorder import Recorder
 from app.remediation.context import (
@@ -24,6 +21,7 @@ from app.remediation.context import (
     ContextWindowDetector,
 )
 from app.remediation.retry import RetryableDetector
+from mock_upstream import MockUpstream, make_request, settings_override
 
 # The canonical llama.cpp / LiteLLM error body when the context window fills.
 _LLAMACPP_ERROR = {
@@ -94,104 +92,45 @@ def test_defers_non_retryable_status():
 # --- integration harness ---------------------------------------------
 
 
-class _ContextHandler(BaseHTTPRequestHandler):
-    # Class-level config shared across requests.
-    status = 500
-    payload = json.dumps(_LLAMACPP_ERROR).encode()
-    requests = 0
-
-    def do_POST(self):
-        type(self).requests += 1
-        self.send_response(type(self).status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(type(self).payload)))
-        self.end_headers()
-        self.wfile.write(type(self).payload)
-
-    def log_message(self, *args):  # silence request logging
-        pass
+def _context_mock(status=500, payload=None):
+    payload = payload if payload is not None else json.dumps(_LLAMACPP_ERROR).encode()
+    return MockUpstream([{"status": status, "content_type": "application/json", "body": payload}])
 
 
-class _MockServer:
-    def __init__(self, status=500, payload=None):
-        self.server = HTTPServer(("127.0.0.1", 0), _ContextHandler)
-        _ContextHandler.status = status
-        _ContextHandler.payload = (
-            payload if payload is not None else json.dumps(_LLAMACPP_ERROR).encode()
-        )
-        _ContextHandler.requests = 0
-        self.port = self.server.server_address[1]
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-
-    def stop(self):
-        self.server.shutdown()
-
-
-def _configure(mock):
-    settings.llm_base_url = f"http://127.0.0.1:{mock.port}"
-    settings.context_window_detection_enabled = True
-    settings.context_window_abort_status = 413
-    settings.retry_max_attempts = 3
-    settings.retry_backoff_initial = 0.0
-    settings.loop_detection_enabled = True
-
-
-async def _make_request(body: bytes):
-    from starlette.requests import Request
-
-    scope = {
-        "type": "http",
-        "asgi": {"version": "3.0"},
-        "http_version": "1.1",
-        "method": "POST",
-        "scheme": "http",
-        "path": "/v1/completions",
-        "raw_path": b"/v1/completions",
-        "query_string": b"",
-        "headers": [
-            (b"content-type", b"application/json"),
-            (b"host", b"127.0.0.1"),
-        ],
-        "client": ("127.0.0.1", 12345),
-        "server": ("127.0.0.1", 8000),
-    }
-
-    async def receive():
-        return {"type": "http.request", "body": body, "more_body": False}
-
-    return Request(scope, receive)
+def _context_settings(mock):
+    return settings_override(
+        llm_base_url=mock.url,
+        context_window_detection_enabled=True,
+        context_window_abort_status=413,
+        retry_max_attempts=3,
+        retry_backoff_initial=0.0,
+        loop_detection_enabled=True,
+    )
 
 
 def test_buffered_forward_fails_fast():
     """Non-chat path: retryable 500 + context body -> one attempt, passed
     through verbatim (upstream status + body) instead of retried."""
-    mock = _MockServer(status=500)
-    try:
-        _configure(mock)
+    with _context_mock(status=500) as mock, _context_settings(mock):
         recorder = Recorder("/tmp/context_buffered.jsonl")
 
         async def run():
             proxy = Proxy(recorder)
             body = json.dumps({"prompt": "hello", "max_tokens": 16}).encode()
-            request = await _make_request(body)
+            request = await make_request(body, path="/v1/completions")
             return await proxy.forward(request, "v1/completions")
 
         resp = asyncio.run(run())
         assert resp.status_code == 500, (resp.status_code, resp.body)
         # The upstream's own error is forwarded verbatim, not translated.
         assert json.loads(resp.body) == _LLAMACPP_ERROR, resp.body
-        assert _ContextHandler.requests == 1, _ContextHandler.requests
-    finally:
-        mock.stop()
+        assert mock.request_count == 1
 
 
 def test_streaming_fails_fast():
     """Chat path (HTTP error branch): retryable 500 + context body -> passed
     through verbatim (upstream status + body) instead of retried."""
-    mock = _MockServer(status=500)
-    try:
-        _configure(mock)
+    with _context_mock(status=500) as mock, _context_settings(mock):
         recorder = Recorder("/tmp/context_streaming.jsonl")
 
         async def run():
@@ -220,9 +159,7 @@ def test_streaming_fails_fast():
         assert resp.status_code == 500, (resp.status_code, resp.body)
         # The upstream's own error is forwarded verbatim, not translated.
         assert json.loads(resp.body) == _LLAMACPP_ERROR, resp.body
-        assert _ContextHandler.requests == 1, _ContextHandler.requests
-    finally:
-        mock.stop()
+        assert mock.request_count == 1
 
 
 def _run_all() -> int:

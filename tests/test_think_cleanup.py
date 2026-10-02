@@ -12,14 +12,12 @@ content and preserve the relocated reasoning.
 
 import asyncio
 import json
-import threading
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from app.config import settings
 from app.proxy import Proxy
 from app.recorder import Recorder
 from app.remediation.think import ThinkContentGuard
+from mock_upstream import MockUpstream, chunk, settings_override
 
 _PLACEHOLDER = "THE PLACEHOLDER"
 
@@ -158,81 +156,40 @@ def test_guard_empty_apply_placeholder():
 # --- integration harness ---------------------------------------------
 
 
-def _chunk(delta: dict, finish_reason=None, usage=None) -> dict:
-    chunk = {
-        "id": "chatcmpl-think",
-        "object": "chat.completion.chunk",
-        "created": 1,
-        "model": "test",
-        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
-    }
-    if usage is not None:
-        chunk["usage"] = usage
-    return chunk
-
-
-class _MockHandler(BaseHTTPRequestHandler):
-    chunks: list = []
-
-    def do_POST(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.end_headers()
-        for chunk in type(self).chunks:
-            try:
-                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                break
-
-    def log_message(self, *args):  # silence request logging
-        pass
-
-
-class _MockServer:
-    def __init__(self, chunks):
-        self.server = HTTPServer(("127.0.0.1", 0), _MockHandler)
-        _MockHandler.chunks = chunks
-        self.port = self.server.server_address[1]
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-
-    def stop(self):
-        self.server.shutdown()
+_chunk = chunk
 
 
 def _run_forward(chunks, stream=False):
-    mock = _MockServer(chunks)
-    try:
-
-        async def run():
-            settings.llm_base_url = f"http://127.0.0.1:{mock.port}"
-            settings.loop_detection_enabled = True
-            settings.think_cleanup_enabled = True
-            settings.think_empty_response_placeholder = _PLACEHOLDER
+    with MockUpstream([{"chunks": chunks}]) as mock:
+        with settings_override(
+            llm_base_url=mock.url,
+            loop_detection_enabled=True,
+            think_cleanup_enabled=True,
+            think_empty_response_placeholder=_PLACEHOLDER,
+        ):
             recorder = Recorder("/tmp/think_cleanup_integration.jsonl")
             proxy = Proxy(recorder)
             req = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
             if stream:
                 req["stream"] = True
             body = json.dumps(req).encode()
-            return await proxy._forward_streaming(
-                request_id="think-itest",
-                method="POST",
-                url="/v1/chat/completions",
-                query="",
-                body=body,
-                headers={"content-type": "application/json"},
-                base_entry={
-                    "request_id": "think-itest",
-                    "method": "POST",
-                    "path": "/v1/chat/completions",
-                },
-            )
 
-        return asyncio.run(run())
-    finally:
-        mock.stop()
+            async def run():
+                return await proxy._forward_streaming(
+                    request_id="think-itest",
+                    method="POST",
+                    url="/v1/chat/completions",
+                    query="",
+                    body=body,
+                    headers={"content-type": "application/json"},
+                    base_entry={
+                        "request_id": "think-itest",
+                        "method": "POST",
+                        "path": "/v1/chat/completions",
+                    },
+                )
+
+            return asyncio.run(run())
 
 
 def test_reconstructed_think_only_returns_placeholder():

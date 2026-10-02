@@ -10,71 +10,25 @@ flowing case is not aborted.
 
 import asyncio
 import json
-import threading
-import time
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from app.config import settings
 from app.proxy import Proxy
 from app.recorder import Recorder
+from mock_upstream import MockUpstream, chunk, settings_override, sse
 
-
-def _chunk(delta: dict, finish_reason=None) -> dict:
-    return {
-        "id": "chatcmpl-test",
-        "object": "chat.completion.chunk",
-        "created": 1,
-        "model": "test",
-        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
-    }
-
-
-def _sse(chunk: dict) -> bytes:
-    return f"data: {json.dumps(chunk)}\n\n".encode()
-
-
-class _MockHandler(BaseHTTPRequestHandler):
-    # Each step is (seconds_to_sleep_before_write, payload_bytes).
-    steps: list = []
-
-    def do_POST(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.end_headers()
-        for delay, payload in type(self).steps:
-            time.sleep(delay)
-            try:
-                self.wfile.write(payload)
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                break
-
-    def log_message(self, *args):  # silence request logging
-        pass
-
-
-class _MockServer:
-    def __init__(self, steps):
-        self.server = HTTPServer(("127.0.0.1", 0), _MockHandler)
-        _MockHandler.steps = steps
-        self.port = self.server.server_address[1]
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-
-    def stop(self):
-        self.server.shutdown()
+_chunk = chunk
+_sse = sse
 
 
 def _run_forward(steps):
-    mock = _MockServer(steps)
-    try:
-
-        async def run():
-            settings.llm_base_url = f"http://127.0.0.1:{mock.port}"
-            settings.stall_detection_enabled = True
-            settings.stall_ttft_seconds = 0.2
-            settings.stall_gap_seconds = 0.3
+    with MockUpstream([{"steps": steps}]) as mock:
+        with settings_override(
+            llm_base_url=mock.url,
+            stall_detection_enabled=True,
+            stall_ttft_seconds=0.2,
+            stall_gap_seconds=0.3,
+        ):
             recorder = Recorder("/tmp/stall_integration.jsonl")
             proxy = Proxy(recorder)
             body = json.dumps(
@@ -83,23 +37,23 @@ def _run_forward(steps):
                     "messages": [{"role": "user", "content": "hi"}],
                 }
             ).encode()
-            return await proxy._forward_streaming(
-                request_id="stall-itest",
-                method="POST",
-                url="/v1/chat/completions",
-                query="",
-                body=body,
-                headers={"content-type": "application/json"},
-                base_entry={
-                    "request_id": "stall-itest",
-                    "method": "POST",
-                    "path": "/v1/chat/completions",
-                },
-            )
 
-        return asyncio.run(run())
-    finally:
-        mock.stop()
+            async def run():
+                return await proxy._forward_streaming(
+                    request_id="stall-itest",
+                    method="POST",
+                    url="/v1/chat/completions",
+                    query="",
+                    body=body,
+                    headers={"content-type": "application/json"},
+                    base_entry={
+                        "request_id": "stall-itest",
+                        "method": "POST",
+                        "path": "/v1/chat/completions",
+                    },
+                )
+
+            return asyncio.run(run())
 
 
 def test_stall_aborts_silent_stream():

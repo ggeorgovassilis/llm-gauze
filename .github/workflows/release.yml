@@ -1,0 +1,33 @@
+name: Cut release
+
+# The single manual step of the release process: supply the next incrementing
+# version number (e.g. 7) and this workflow tags `v7` and pushes it. The tag
+# push then triggers `.github/workflows/publish.yml`, which builds, publishes,
+# and creates the GitHub Release.
+#
+# CI never invents the version — the number is a human decision supplied as an
+# input. The tag remains the single source of truth.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version number (e.g. 7)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Tag v${{ inputs.version }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"

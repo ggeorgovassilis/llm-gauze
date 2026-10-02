@@ -34,9 +34,7 @@ def _guard(tags=None, placeholder=_PLACEHOLDER):
 def test_relocates_and_keeps_visible_answer():
     # A think block followed by real content: the block is relocated, the
     # visible answer stays put, no placeholder is needed.
-    content, reasoning, changes = _guard().clean(
-        "<think>scratch</think> the real answer"
-    )
+    content, reasoning, changes = _guard().clean("<think>scratch</think> the real answer")
     assert content == " the real answer", repr(content)
     assert reasoning == "scratch", repr(reasoning)
     assert changes == [{"kind": "relocated_think", "chars": 7, "blocks": 1}], changes
@@ -87,17 +85,13 @@ def test_no_placeholder_when_both_empty():
 
 
 def test_preserves_existing_reasoning():
-    content, reasoning, _ = _guard().clean(
-        "<think>extra</think>", "existing"
-    )
+    content, reasoning, _ = _guard().clean("<think>extra</think>", "existing")
     assert reasoning == "existing\nextra", repr(reasoning)
     assert content == _PLACEHOLDER, repr(content)
 
 
 def test_custom_tags():
-    content, reasoning, changes = _guard(tags=("ponder",)).clean(
-        "<ponder>x</ponder>"
-    )
+    content, reasoning, changes = _guard(tags=("ponder",)).clean("<ponder>x</ponder>")
     assert reasoning == "x", repr(reasoning)
     assert content == _PLACEHOLDER, repr(content)
     kinds = {c["kind"] for c in changes}
@@ -106,9 +100,7 @@ def test_custom_tags():
 
 def test_think_only_emits_placeholder_not_empty():
     # The exact observed failure: the model replies only with a think tag.
-    content, reasoning, changes = _guard().clean(
-        "<think>step one, step two</think>"
-    )
+    content, reasoning, changes = _guard().clean("<think>step one, step two</think>")
     assert content == _PLACEHOLDER, repr(content)
     assert reasoning == "step one, step two", repr(reasoning)
     kinds = {c["kind"] for c in changes}
@@ -125,9 +117,7 @@ def test_tool_call_turn_is_not_replaced():
             "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
         }
     ]
-    content, reasoning, changes = _guard().clean(
-        "", "which tool should I call?", tool_calls
-    )
+    content, reasoning, changes = _guard().clean("", "which tool should I call?", tool_calls)
     assert content == "", repr(content)
     assert reasoning == "which tool should I call?", repr(reasoning)
     assert changes == [], changes
@@ -143,9 +133,7 @@ def test_tool_call_turn_still_relocates_leaked_tag():
             "function": {"name": "get_weather", "arguments": "{}"},
         }
     ]
-    content, reasoning, changes = _guard().clean(
-        "<think>which tool</think>", "", tool_calls
-    )
+    content, reasoning, changes = _guard().clean("<think>which tool</think>", "", tool_calls)
     assert content == "", repr(content)
     assert reasoning == "which tool", repr(reasoning)
     assert changes == [{"kind": "relocated_think", "chars": 10, "blocks": 1}], changes
@@ -206,9 +194,7 @@ class _MockServer:
         self.server = HTTPServer(("127.0.0.1", 0), _MockHandler)
         _MockHandler.chunks = chunks
         self.port = self.server.server_address[1]
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, daemon=True
-        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
     def stop(self):
@@ -313,12 +299,8 @@ def test_reconstructed_tool_call_turn_no_placeholder():
                 ]
             }
         ),
-        _chunk(
-            {"tool_calls": [{"index": 0, "function": {"arguments": '{"city":'}}]}
-        ),
-        _chunk(
-            {"tool_calls": [{"index": 0, "function": {"arguments": '"Paris"}'}}]}
-        ),
+        _chunk({"tool_calls": [{"index": 0, "function": {"arguments": '{"city":'}}]}),
+        _chunk({"tool_calls": [{"index": 0, "function": {"arguments": '"Paris"}'}}]}),
         _chunk({}, finish_reason="tool_calls"),
     ]
     resp = _run_forward(chunks, stream=False)

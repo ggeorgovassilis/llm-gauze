@@ -38,9 +38,7 @@ class Detector(ABC):
         """Classify an exception raised while contacting the upstream."""
 
     @abstractmethod
-    def diagnose_status(
-        self, status: int, body: bytes | None = None
-    ) -> Diagnosis:
+    def diagnose_status(self, status: int, body: bytes | None = None) -> Diagnosis:
         """Classify an HTTP status returned by the upstream.
 
         ``body`` carries the upstream response payload when available, so

@@ -39,14 +39,10 @@ class Recorder:
         # Collision (same second) is vanishingly unlikely, but avoid clobbering.
         counter = 1
         while rotated.exists():
-            rotated = self.path.with_name(
-                f"{self.path.stem}-{stamp}-{counter}{self.path.suffix}"
-            )
+            rotated = self.path.with_name(f"{self.path.stem}-{stamp}-{counter}{self.path.suffix}")
             counter += 1
         self.path.rename(rotated)
-        logger.info(
-            "rotated existing record file %s -> %s", self.path.name, rotated.name
-        )
+        logger.info("rotated existing record file %s -> %s", self.path.name, rotated.name)
 
     def record(self, entry: dict) -> None:
         """Persist a single exchange record.

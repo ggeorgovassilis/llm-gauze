@@ -20,7 +20,7 @@ from fastapi.responses import Response
 
 from app.config import settings
 from app.recorder import Recorder
-from app.remediation.base import RetryPolicy, StreamVerdict
+from app.remediation.base import Detector, RetryPolicy, StreamVerdict
 from app.remediation.coast import CoastPolicy
 from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
 from app.remediation.loop import ThinkingLoopDetector
@@ -173,11 +173,7 @@ def _extract_stream_chunk(
     choice = choices[0] if choices else {}
     delta = choice.get("delta") or choice.get("message") or {}
     content = delta.get("content")
-    reasoning = (
-        delta.get("reasoning_content")
-        or delta.get("reasoning")
-        or delta.get("thinking")
-    )
+    reasoning = delta.get("reasoning_content") or delta.get("reasoning") or delta.get("thinking")
     tool_calls = delta.get("tool_calls")
     meta = {
         "id": chunk.get("id"),
@@ -283,9 +279,7 @@ def _reconstruct_sse_lines(
     def _emit(delta: dict, finish_reason: str | None = None) -> None:
         chunk = {
             **base,
-            "choices": [
-                {"index": 0, "delta": delta, "finish_reason": finish_reason}
-            ],
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
         }
         lines.append("data: " + json.dumps(chunk))
 
@@ -307,8 +301,7 @@ def _filtered_headers(headers: dict) -> tuple[dict, str | None]:
     out = {
         k: v
         for k, v in headers.items()
-        if k.lower() not in HOP_BY_HOP_HEADERS
-        and k.lower() not in _OWNED_RESPONSE_HEADERS
+        if k.lower() not in HOP_BY_HOP_HEADERS and k.lower() not in _OWNED_RESPONSE_HEADERS
     }
     return out, content_type
 
@@ -317,15 +310,10 @@ def _abort_error_response(verdict: StreamVerdict) -> Response:
     """Build the client-facing response for an aborted stream (loop/stall)."""
     kind = verdict.kind
     message = {
-        "loop": (
-            "The model entered a repetitive loop and the request was aborted."
-        ),
-        "stalled": (
-            "The model stopped producing output and the request was aborted."
-        ),
+        "loop": ("The model entered a repetitive loop and the request was aborted."),
+        "stalled": ("The model stopped producing output and the request was aborted."),
         "runaway_reasoning": (
-            "The model kept reasoning without producing an answer and the "
-            "request was aborted."
+            "The model kept reasoning without producing an answer and the request was aborted."
         ),
     }.get(kind, f"The stream was aborted ({kind}).")
     status_code = (
@@ -394,12 +382,8 @@ def _context_window_error_response(
 
 def _build_retry_policy() -> RetryPolicy:
     """Assemble the retry policy (understanding + action) from settings."""
-    statuses = {
-        int(s.strip())
-        for s in settings.retryable_status_codes.split(",")
-        if s.strip()
-    }
-    detector = RetryableDetector(statuses)
+    statuses = {int(s.strip()) for s in settings.retryable_status_codes.split(",") if s.strip()}
+    detector: Detector = RetryableDetector(statuses)
     if settings.context_window_detection_enabled:
         detector = ContextWindowDetector.from_settings(detector)
     backoff = ExponentialBackoff(
@@ -456,19 +440,12 @@ class Proxy:
             "message_overflow": overflow_changes or None,
         }
 
-        headers = {
-            k: v
-            for k, v in request.headers.items()
-            if k.lower() not in HOP_BY_HOP_HEADERS
-        }
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP_HEADERS}
         if overflow_changes:
             # The body was rewritten, so any inbound Content-Length is stale;
             # let httpx recompute it from the actual body (see the streaming
             # path's comment on the same h11 failure mode).
-            headers = {
-                k: v for k, v in headers.items()
-                if k.lower() != "content-length"
-            }
+            headers = {k: v for k, v in headers.items() if k.lower() != "content-length"}
 
         # Chat completions get the streaming loop-detection path; everything
         # else goes through the buffered forwarder unchanged.
@@ -502,9 +479,7 @@ class Proxy:
                 status = upstream.status_code
                 resp_headers = dict(upstream.headers)
                 resp_body = upstream.content
-                diagnosis = policy.detector.diagnose_status(
-                    status, body=resp_body
-                )
+                diagnosis = policy.detector.diagnose_status(status, body=resp_body)
             except Exception as exc:  # noqa: BLE001 - capture everything
                 error = {
                     "type": type(exc).__name__,
@@ -555,17 +530,10 @@ class Proxy:
                 await asyncio.sleep(delay)
                 continue
 
-            if (
-                diagnosis is not None
-                and diagnosis.code == CONTEXT_WINDOW_CODE
-            ):
-                telemetry.incr(
-                    "requests_total", {"outcome": "context_window_exceeded"}
-                )
+            if diagnosis is not None and diagnosis.code == CONTEXT_WINDOW_CODE:
+                telemetry.incr("requests_total", {"outcome": "context_window_exceeded"})
                 telemetry.incr("context_window_aborts_total")
-                return _context_window_error_response(
-                    status, resp_body, resp_headers, diagnosis
-                )
+                return _context_window_error_response(status, resp_body, resp_headers, diagnosis)
 
             if status is None:
                 final_status = 502
@@ -584,8 +552,7 @@ class Proxy:
         out_headers = {
             k: v
             for k, v in final_headers.items()
-            if k.lower() not in HOP_BY_HOP_HEADERS
-            and k.lower() not in _OWNED_RESPONSE_HEADERS
+            if k.lower() not in HOP_BY_HOP_HEADERS and k.lower() not in _OWNED_RESPONSE_HEADERS
         }
 
         return Response(
@@ -624,9 +591,7 @@ class Proxy:
         # re-serialised), so any inbound Content-Length is stale. Drop it and
         # let httpx recompute it from the actual body; forwarding the stale
         # value makes h11 raise "Too much data for declared Content-Length".
-        out_headers = {
-            k: v for k, v in headers.items() if k.lower() != "content-length"
-        }
+        out_headers = {k: v for k, v in headers.items() if k.lower() != "content-length"}
         content_type = _ensure_stream(body)[1]
         if content_type:
             out_headers["content-type"] = content_type
@@ -635,30 +600,14 @@ class Proxy:
         # client gets the reconstructed chat.completion. See `_client_wants_stream`.
         client_wants_stream = _client_wants_stream(body)
 
-        nudge = (
-            NudgePolicy.from_settings()
-            if settings.think_nudge_enabled
-            else None
-        )
-        guard = (
-            ThinkContentGuard.from_settings()
-            if settings.think_cleanup_enabled
-            else None
-        )
-        coast = (
-            CoastPolicy.from_settings()
-            if settings.coast_detection_enabled
-            else None
-        )
+        nudge = NudgePolicy.from_settings() if settings.think_nudge_enabled else None
+        guard = ThinkContentGuard.from_settings() if settings.think_cleanup_enabled else None
+        coast = CoastPolicy.from_settings() if settings.coast_detection_enabled else None
         runaway_nudge = (
-            RunawayReasoningPolicy.from_settings()
-            if settings.runaway_reasoning_enabled
-            else None
+            RunawayReasoningPolicy.from_settings() if settings.runaway_reasoning_enabled else None
         )
 
-        loop_retry = (
-            LoopRetryPolicy.from_settings() if settings.loop_retry_enabled else None
-        )
+        loop_retry = LoopRetryPolicy.from_settings() if settings.loop_retry_enabled else None
         current_body = body
         nudge_attempt = 0
         coast_attempt = 0
@@ -688,9 +637,7 @@ class Proxy:
                     and runaway_attempt < runaway_nudge.max_attempts
                 ):
                     resubmitted = runaway_nudge.apply(request_payload)
-                    self._record_runaway_pass(
-                        base_entry, result, runaway_attempt, resubmitted
-                    )
+                    self._record_runaway_pass(base_entry, result, runaway_attempt, resubmitted)
                     runaway_attempt += 1
                     current_body = json.dumps(resubmitted).encode("utf-8")
                     continue
@@ -722,14 +669,10 @@ class Proxy:
                     result.reasoning,
                 )
             )
-            if empty_turn and nudge_attempt < nudge.max_attempts:
-                self._record_nudge_pass(
-                    base_entry, result, client_wants_stream, nudge_attempt
-                )
+            if empty_turn and nudge is not None and nudge_attempt < nudge.max_attempts:
+                self._record_nudge_pass(base_entry, result, client_wants_stream, nudge_attempt)
                 nudge_attempt += 1
-                current_body = json.dumps(
-                    nudge.apply(request_payload)
-                ).encode("utf-8")
+                current_body = json.dumps(nudge.apply(request_payload)).encode("utf-8")
                 continue
 
             coast_turn = bool(
@@ -743,14 +686,12 @@ class Proxy:
                     request_payload.get("messages"),
                 )
             )
-            if coast_turn and coast_attempt < coast.max_attempts:
-                self._record_coast_pass(
-                    base_entry, result, client_wants_stream, coast_attempt
-                )
+            if coast_turn and coast is not None and coast_attempt < coast.max_attempts:
+                self._record_coast_pass(base_entry, result, client_wants_stream, coast_attempt)
                 coast_attempt += 1
-                current_body = json.dumps(
-                    coast.apply(request_payload, result.content)
-                ).encode("utf-8")
+                current_body = json.dumps(coast.apply(request_payload, result.content)).encode(
+                    "utf-8"
+                )
                 continue
 
             nudge_outcome = None
@@ -840,14 +781,14 @@ class Proxy:
                             # comment lines arrive without resetting the timer,
                             # so a connection kept open by pings still trips the
                             # watchdog once the model goes silent.
-                            timeout = (
-                                max(0.0, stall.remaining()) if stall else None
-                            )
+                            timeout = max(0.0, stall.remaining()) if stall else None
                             try:
-                                line = await asyncio.wait_for(
-                                    anext(lines), timeout=timeout
-                                )
+                                line = await asyncio.wait_for(anext(lines), timeout=timeout)
                             except asyncio.TimeoutError:
+                                # A timeout can only occur when `stall` set a
+                                # budget; with stall detection disabled the
+                                # wait is unbounded and never raises here.
+                                assert stall is not None
                                 loop_verdict = stall.verdict()
                                 loop_stream = "stalled"
                                 break
@@ -880,19 +821,13 @@ class Proxy:
                             # alive; reset the stall watchdog on those.
                             # Tool-call fragments count too: a model slowly
                             # streaming arguments is working, not stalled.
-                            if (
-                                delta_reasoning
-                                or delta_content
-                                or delta_tool_calls
-                            ):
+                            if delta_reasoning or delta_content or delta_tool_calls:
                                 if stall is not None:
                                     stall.note_token()
 
                             # Visible content or a tool call means the model
                             # answered/acted — disarm the runaway watchdog.
-                            if runaway is not None and (
-                                delta_content or delta_tool_calls
-                            ):
+                            if runaway is not None and (delta_content or delta_tool_calls):
                                 runaway.note_content()
 
                             if delta_reasoning:
@@ -938,10 +873,7 @@ class Proxy:
                 # window was spent *reasoning* with no content or tool calls
                 # at all, it is classified as runaway-reasoning instead (#17),
                 # which gets a stop-thinking nudge rather than varied sampling.
-                if (
-                    loop_verdict is None
-                    and meta.get("finish_reason") == "length"
-                ):
+                if loop_verdict is None and meta.get("finish_reason") == "length":
                     if (
                         settings.runaway_reasoning_enabled
                         and (reasoning or "").strip()
@@ -963,10 +895,7 @@ class Proxy:
                     else:
                         loop_verdict = StreamVerdict(
                             kind="loop",
-                            reason=(
-                                "output window exhausted "
-                                "(finish_reason=length)"
-                            ),
+                            reason=("output window exhausted (finish_reason=length)"),
                             details={"finish_reason": "length"},
                         )
                         loop_stream = "response"
@@ -1015,13 +944,9 @@ class Proxy:
                 )
                 if loop_verdict.kind == "loop":
                     telemetry.incr("requests_total", {"outcome": "loop_aborted"})
-                    telemetry.incr(
-                        "loop_aborts_total", {"stream": loop_stream or "unknown"}
-                    )
+                    telemetry.incr("loop_aborts_total", {"stream": loop_stream or "unknown"})
                 elif loop_verdict.kind == "runaway_reasoning":
-                    telemetry.incr(
-                        "requests_total", {"outcome": "runaway_reasoning_aborted"}
-                    )
+                    telemetry.incr("requests_total", {"outcome": "runaway_reasoning_aborted"})
                     telemetry.incr("runaway_reasoning_aborts_total")
                 else:
                     telemetry.incr("requests_total", {"outcome": "stalled"})
@@ -1041,6 +966,9 @@ class Proxy:
 
             # Transport error -> retry or give up (mirrors the buffered path).
             if error is not None:
+                # `error` is only ever set by the exception handler above,
+                # which also classifies the failure, so `diagnosis` is set.
+                assert diagnosis is not None
                 self.recorder.record(
                     {
                         **base_entry,
@@ -1053,10 +981,7 @@ class Proxy:
                         "duration": time.time() - started,
                     }
                 )
-                if (
-                    diagnosis is not None
-                    and diagnosis.code == CONTEXT_WINDOW_CODE
-                ):
+                if diagnosis is not None and diagnosis.code == CONTEXT_WINDOW_CODE:
                     telemetry.incr(
                         "requests_total",
                         {"outcome": "context_window_exceeded"},
@@ -1089,9 +1014,7 @@ class Proxy:
 
             # HTTP error status -> retry or return it.
             if status is not None and status >= 400:
-                diagnosis = policy.detector.diagnose_status(
-                    status, body=error_body
-                )
+                diagnosis = policy.detector.diagnose_status(status, body=error_body)
                 self.recorder.record(
                     {
                         **base_entry,
@@ -1104,10 +1027,7 @@ class Proxy:
                         "duration": time.time() - started,
                     }
                 )
-                if (
-                    diagnosis is not None
-                    and diagnosis.code == CONTEXT_WINDOW_CODE
-                ):
+                if diagnosis is not None and diagnosis.code == CONTEXT_WINDOW_CODE:
                     telemetry.incr(
                         "requests_total",
                         {"outcome": "context_window_exceeded"},
@@ -1145,9 +1065,7 @@ class Proxy:
             relocate_changes: list = []
             if settings.think_cleanup_enabled:
                 guard = ThinkContentGuard.from_settings()
-                content, reasoning, relocate_changes = guard.relocate(
-                    content, reasoning
-                )
+                content, reasoning, relocate_changes = guard.relocate(content, reasoning)
 
             return _StreamResult(
                 content=content,
@@ -1307,21 +1225,15 @@ class Proxy:
         reasoning = result.reasoning
         cleanup_changes = list(result.relocate_changes)
         if guard is not None:
-            content, guard_changes = guard.guard_empty(
-                content, reasoning, result.tool_calls
-            )
+            content, guard_changes = guard.guard_empty(content, reasoning, result.tool_calls)
             cleanup_changes.extend(guard_changes)
 
         tool_changes: list = []
         if settings.tool_call_guard_enabled and result.tool_calls:
-            tool_changes = ToolCallGuard.from_settings().validate(
-                result.tool_calls
-            )
+            tool_changes = ToolCallGuard.from_settings().validate(result.tool_calls)
 
         final_body = json.dumps(
-            _reconstruct_chat_completion(
-                result.meta, content, reasoning, result.tool_calls
-            )
+            _reconstruct_chat_completion(result.meta, content, reasoning, result.tool_calls)
         ).encode("utf-8")
 
         nudge_entry = None
@@ -1357,9 +1269,7 @@ class Proxy:
                 # The raw SSE lines still carry the pre-remediation values
                 # (leaked tags or malformed tool-call arguments); rebuild the
                 # stream from the cleaned/repaired values instead.
-                lines = _reconstruct_sse_lines(
-                    result.meta, content, reasoning, result.tool_calls
-                )
+                lines = _reconstruct_sse_lines(result.meta, content, reasoning, result.tool_calls)
             else:
                 lines = list(result.sse_lines)
                 # Guarantee a clean SSE termination even if the upstream

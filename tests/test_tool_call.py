@@ -90,17 +90,15 @@ def test_unbalanced_brackets_flagged():
 def test_missing_function_flagged():
     calls = [{"id": "call_1", "type": "function"}]
     changes = _guard().validate(calls)
-    assert changes == [
-        {"kind": "flagged_malformed", "index": 0, "reason": "missing_function"}
-    ], changes
+    assert changes == [{"kind": "flagged_malformed", "index": 0, "reason": "missing_function"}], (
+        changes
+    )
 
 
 def test_missing_name_flagged():
-    calls = [_call('{}', name="")]
+    calls = [_call("{}", name="")]
     changes = _guard().validate(calls)
-    assert changes == [
-        {"kind": "flagged_malformed", "index": 0, "reason": "missing_name"}
-    ], changes
+    assert changes == [{"kind": "flagged_malformed", "index": 0, "reason": "missing_name"}], changes
 
 
 def test_arguments_not_string_flagged():
@@ -157,9 +155,7 @@ class _MockServer:
         self.server = HTTPServer(("127.0.0.1", 0), _MockHandler)
         _MockHandler.chunks = chunks
         self.port = self.server.server_address[1]
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, daemon=True
-        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
     def stop(self):
@@ -236,9 +232,7 @@ def test_truncated_tool_call_is_repaired_end_to_end():
 
     # The repair is recorded, never silent.
     final = records[-1]
-    assert final["tool_repair"] == [
-        {"kind": "repaired_arguments", "index": 0}
-    ], final
+    assert final["tool_repair"] == [{"kind": "repaired_arguments", "index": 0}], final
 
 
 def test_unfixable_tool_call_is_flagged_not_crashed():

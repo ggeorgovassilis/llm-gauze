@@ -54,9 +54,7 @@ class _MockServer:
         self.server = HTTPServer(("127.0.0.1", 0), _MockHandler)
         _MockHandler.chunks = chunks
         self.port = self.server.server_address[1]
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, daemon=True
-        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
     def stop(self):
@@ -98,9 +96,7 @@ class _SequenceServer:
         _SequenceHandler.responses = list(responses)
         _SequenceHandler.requests = []
         self.port = self.server.server_address[1]
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, daemon=True
-        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
     def stop(self):
@@ -253,13 +249,12 @@ def test_loop_retry_breaks_loop():
     assert second["temperature"] == settings.loop_retry_temperature, second
     assert second["repeat_penalty"] == settings.loop_retry_repeat_penalty, second
     assert second["presence_penalty"] == settings.loop_retry_presence_penalty, second
-    assert (
-        second["frequency_penalty"] == settings.loop_retry_frequency_penalty
-    ), second
+    assert second["frequency_penalty"] == settings.loop_retry_frequency_penalty, second
     # The recorded loop_retry entry must capture the exact re-submitted body,
     # so the overridden sampling is auditable against the client's original.
     recorded = [
-        line for line in open("/tmp/loop_retry_integration.jsonl")
+        line
+        for line in open("/tmp/loop_retry_integration.jsonl")
         if json.loads(line).get("loop_retry")
     ]
     assert recorded, "expected a loop_retry record"
@@ -312,9 +307,7 @@ def test_stale_content_length_header():
     """
     # No ``stream`` key on purpose: `_ensure_stream` *adds* ``"stream": true``,
     # making the rewritten body longer than the inbound Content-Length.
-    body = json.dumps(
-        {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
-    ).encode()
+    body = json.dumps({"model": "test", "messages": [{"role": "user", "content": "hi"}]}).encode()
     sentences = [
         "The capital of France is Paris.",
         "Water boils at one hundred degrees Celsius.",
@@ -381,16 +374,8 @@ def test_tool_calls_reconstruction():
                 ],
             }
         ),
-        _chunk(
-            {"tool_calls": [{"index": 0, "function": {"arguments": '{"loc'}}]}
-        ),
-        _chunk(
-            {
-                "tool_calls": [
-                    {"index": 0, "function": {"arguments": 'ation": "Paris"}'}}
-                ]
-            }
-        ),
+        _chunk({"tool_calls": [{"index": 0, "function": {"arguments": '{"loc'}}]}),
+        _chunk({"tool_calls": [{"index": 0, "function": {"arguments": 'ation": "Paris"}'}}]}),
         _chunk({}, finish_reason="tool_calls"),
     ]
     resp = _run_forward(chunks)

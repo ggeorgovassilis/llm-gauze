@@ -28,10 +28,7 @@ from app.remediation.retry import RetryableDetector
 # The canonical llama.cpp / LiteLLM error body when the context window fills.
 _LLAMACPP_ERROR = {
     "error": {
-        "message": (
-            "the request was aborted because it would have exceeded "
-            "the context window"
-        ),
+        "message": ("the request was aborted because it would have exceeded the context window"),
         "type": "invalid_request_error",
         "code": 400,
     }
@@ -47,27 +44,21 @@ def _detector(statuses=(500,)):
 
 def test_detects_context_overflow_in_body():
     d = _detector()
-    diagnosis = d.diagnose_status(
-        500, body=json.dumps(_LLAMACPP_ERROR).encode()
-    )
+    diagnosis = d.diagnose_status(500, body=json.dumps(_LLAMACPP_ERROR).encode())
     assert diagnosis.retryable is False, diagnosis
     assert diagnosis.code == CONTEXT_WINDOW_CODE, diagnosis
 
 
 def test_detects_context_overflow_in_exception_message():
     d = _detector()
-    diagnosis = d.diagnose_exception(
-        RuntimeError(_LLAMACPP_ERROR["error"]["message"])
-    )
+    diagnosis = d.diagnose_exception(RuntimeError(_LLAMACPP_ERROR["error"]["message"]))
     assert diagnosis.retryable is False, diagnosis
     assert diagnosis.code == CONTEXT_WINDOW_CODE, diagnosis
 
 
 def test_markers_are_case_insensitive():
     d = _detector()
-    diagnosis = d.diagnose_status(
-        500, body=b'{"error": "Exceeded The Context Window"}'
-    )
+    diagnosis = d.diagnose_status(500, body=b'{"error": "Exceeded The Context Window"}')
     assert diagnosis.retryable is False, diagnosis
     assert diagnosis.code == CONTEXT_WINDOW_CODE, diagnosis
 
@@ -78,7 +69,7 @@ def test_detects_litellm_phrasing():
     d = _detector()
     body = (
         '{"error": {"message": "litellm.ContextWindowExceededError: '
-        'request (33101 tokens) exceeds the available context size '
+        "request (33101 tokens) exceeds the available context size "
         '(32768 tokens), try increasing it"}}'
     )
     diagnosis = d.diagnose_status(400, body=body.encode())
@@ -130,9 +121,7 @@ class _MockServer:
         )
         _ContextHandler.requests = 0
         self.port = self.server.server_address[1]
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, daemon=True
-        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
     def stop(self):
@@ -184,9 +173,7 @@ def test_buffered_forward_fails_fast():
 
         async def run():
             proxy = Proxy(recorder)
-            body = json.dumps(
-                {"prompt": "hello", "max_tokens": 16}
-            ).encode()
+            body = json.dumps({"prompt": "hello", "max_tokens": 16}).encode()
             request = await _make_request(body)
             return await proxy.forward(request, "v1/completions")
 

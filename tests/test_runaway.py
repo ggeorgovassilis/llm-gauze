@@ -53,8 +53,7 @@ def _content(text: str) -> dict:
 # runaway token budget trips. Seeded for determinism.
 _rng = random.Random(1234)
 _REASONING_FLOOD = " ".join(
-    "".join(_rng.choices("abcdefghijklmnopqrstuvwxyz", k=6))
-    for _ in range(2500)
+    "".join(_rng.choices("abcdefghijklmnopqrstuvwxyz", k=6)) for _ in range(2500)
 )
 
 # A runaway turn: a flood of non-repeating reasoning, then the window is hit.
@@ -141,18 +140,14 @@ class _MockServer:
         _MockHandler.chunks_by_request = chunks_by_request
         _MockHandler.requests = 0
         self.port = self.server.server_address[1]
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, daemon=True
-        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
     def stop(self):
         self.server.shutdown()
 
 
-def _run_forward(
-    chunks_by_request, *, enabled=True, max_attempts=2, loop_retry=False
-):
+def _run_forward(chunks_by_request, *, enabled=True, max_attempts=2, loop_retry=False):
     mock = _MockServer(chunks_by_request)
     try:
 
@@ -186,9 +181,7 @@ def _run_forward(
                 },
             )
             records = [
-                json.loads(line)
-                for line in open("/tmp/runaway_integration.jsonl")
-                if line.strip()
+                json.loads(line) for line in open("/tmp/runaway_integration.jsonl") if line.strip()
             ]
             return resp, records
 
@@ -203,9 +196,7 @@ def test_runaway_turn_is_nudged_and_returns_answer():
     data = json.loads(resp.body)
     assert "The answer is 42." in data["choices"][0]["message"]["content"]
     assert _MockHandler.requests == 2, _MockHandler.requests
-    triggered = [
-        r for r in records if r.get("runaway", {}).get("outcome") == "triggered"
-    ]
+    triggered = [r for r in records if r.get("runaway", {}).get("outcome") == "triggered"]
     assert len(triggered) == 1, records
     # The re-submission carried the nudge instruction.
     resubmitted = triggered[0]["runaway"]["resubmitted_body"]
@@ -213,9 +204,7 @@ def test_runaway_turn_is_nudged_and_returns_answer():
 
 
 def test_runaway_budget_exhausted_aborts():
-    resp, records = _run_forward(
-        [_RUNAWAY_TURN, _RUNAWAY_TURN, _RUNAWAY_TURN], max_attempts=2
-    )
+    resp, records = _run_forward([_RUNAWAY_TURN, _RUNAWAY_TURN, _RUNAWAY_TURN], max_attempts=2)
     assert resp.status_code == 502, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     assert data["error"]["type"] == "runaway_reasoning_detected", data
@@ -232,9 +221,7 @@ def test_content_producing_turn_never_flagged():
 def test_disabled_terminal_turn_is_plain_loop():
     # With the runaway feature off, a reasoning-only length turn falls back to
     # the generic loop verdict (and, with loop-retry also off, aborts as loop).
-    resp, records = _run_forward(
-        [_RUNAWAY_TURN], enabled=False, loop_retry=False
-    )
+    resp, records = _run_forward([_RUNAWAY_TURN], enabled=False, loop_retry=False)
     assert resp.status_code == 502, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     assert data["error"]["type"] == "loop_detected", data

@@ -78,8 +78,7 @@ class RunawayReasoningDetector:
         return StreamVerdict(
             kind="runaway_reasoning",
             reason=(
-                f"reasoning token budget exceeded "
-                f"({self.reasoning_tokens} tokens) with no content"
+                f"reasoning token budget exceeded ({self.reasoning_tokens} tokens) with no content"
             ),
             details={
                 "reasoning_tokens": self.reasoning_tokens,
@@ -101,13 +100,9 @@ class RunawayReasoningPolicy:
         text: str | None = None,
         max_attempts: int | None = None,
     ) -> None:
-        self.text = (
-            text if text is not None else settings.runaway_reasoning_nudge_text
-        )
+        self.text = text if text is not None else settings.runaway_reasoning_nudge_text
         self.max_attempts = (
-            max_attempts
-            if max_attempts is not None
-            else settings.runaway_reasoning_max_attempts
+            max_attempts if max_attempts is not None else settings.runaway_reasoning_max_attempts
         )
 
     @classmethod

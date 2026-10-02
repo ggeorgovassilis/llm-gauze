@@ -1,3 +1,5 @@
 # Development/test dependencies — installed only in the CI/test image, never in
 # the runtime image. Pinned per project convention.
 pytest==8.3.4
+ruff==0.16.10
+mypy==2.4.0

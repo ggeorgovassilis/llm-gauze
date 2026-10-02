@@ -6,3 +6,22 @@
 testpaths = ["tests"]
 pythonpath = ["source"]
 addopts = "-q"
+
+[tool.ruff]
+# Lint + format + import sorting in one tool (ruff subsumes isort/black).
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# Default pyflakes + pycodestyle rules, plus import sorting (I).
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+# Pragmatic: type-check the application without requiring full strictness.
+warn_unused_configs = true
+warn_redundant_casts = true
+check_untyped_defs = true

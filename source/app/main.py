@@ -32,9 +32,7 @@ router = APIRouter()
 
 @router.get("/health")
 async def health() -> JSONResponse:
-    return JSONResponse(
-        {"status": "ok", "upstream": settings.llm_base_url}
-    )
+    return JSONResponse({"status": "ok", "upstream": settings.llm_base_url})
 
 
 @router.get("/metrics")

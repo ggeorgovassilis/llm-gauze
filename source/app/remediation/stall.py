@@ -77,14 +77,10 @@ class StallDetector:
         elapsed = now - anchor
         if self.saw_first_token:
             reason = (
-                f"no content-bearing token for {self.gap_seconds:g}s "
-                f"(last token {elapsed:g}s ago)"
+                f"no content-bearing token for {self.gap_seconds:g}s (last token {elapsed:g}s ago)"
             )
         else:
-            reason = (
-                f"no first token within {self.ttft_seconds:g}s "
-                f"({elapsed:g}s elapsed)"
-            )
+            reason = f"no first token within {self.ttft_seconds:g}s ({elapsed:g}s elapsed)"
         return StreamVerdict(
             kind="stalled",
             reason=reason,

@@ -101,77 +101,98 @@ def _loop_request():
 
 def test_should_nudge_coasted_turn():
     req = _loop_request()
-    assert CoastPolicy(text=_COAST_TEXT).should_nudge(
-        "stop",
-        _COASTED_CONTENT,
-        None,
-        _COASTED_CONTENT,
-        req["tools"],
-        req["messages"],
-    ) is True
+    assert (
+        CoastPolicy(text=_COAST_TEXT).should_nudge(
+            "stop",
+            _COASTED_CONTENT,
+            None,
+            _COASTED_CONTENT,
+            req["tools"],
+            req["messages"],
+        )
+        is True
+    )
 
 
 def test_should_nudge_ignores_real_tool_call():
     req = _loop_request()
     tool_calls = [{"id": "c", "function": {"name": "next_chunk", "arguments": "{}"}}]
-    assert CoastPolicy(text=_COAST_TEXT).should_nudge(
-        "stop", "", tool_calls, "", req["tools"], req["messages"]
-    ) is False
+    assert (
+        CoastPolicy(text=_COAST_TEXT).should_nudge(
+            "stop", "", tool_calls, "", req["tools"], req["messages"]
+        )
+        is False
+    )
 
 
 def test_should_nudge_requires_non_empty_content():
     req = _loop_request()
-    assert CoastPolicy(text=_COAST_TEXT).should_nudge(
-        "stop", "   ", None, "   ", req["tools"], req["messages"]
-    ) is False
+    assert (
+        CoastPolicy(text=_COAST_TEXT).should_nudge(
+            "stop", "   ", None, "   ", req["tools"], req["messages"]
+        )
+        is False
+    )
 
 
 def test_should_nudge_requires_reasoning_match():
     req = _loop_request()
-    assert CoastPolicy(text=_COAST_TEXT).should_nudge(
-        "stop",
-        _COASTED_CONTENT,
-        None,
-        "some different reasoning",
-        req["tools"],
-        req["messages"],
-    ) is False
+    assert (
+        CoastPolicy(text=_COAST_TEXT).should_nudge(
+            "stop",
+            _COASTED_CONTENT,
+            None,
+            "some different reasoning",
+            req["tools"],
+            req["messages"],
+        )
+        is False
+    )
 
 
 def test_should_nudge_requires_tools():
     req = _loop_request()
-    assert CoastPolicy(text=_COAST_TEXT).should_nudge(
-        "stop",
-        _COASTED_CONTENT,
-        None,
-        _COASTED_CONTENT,
-        None,
-        req["messages"],
-    ) is False
+    assert (
+        CoastPolicy(text=_COAST_TEXT).should_nudge(
+            "stop",
+            _COASTED_CONTENT,
+            None,
+            _COASTED_CONTENT,
+            None,
+            req["messages"],
+        )
+        is False
+    )
 
 
 def test_should_nudge_requires_prior_tool_call():
     req = _loop_request()
-    assert CoastPolicy(text=_COAST_TEXT).should_nudge(
-        "stop",
-        _COASTED_CONTENT,
-        None,
-        _COASTED_CONTENT,
-        req["tools"],
-        [{"role": "user", "content": "hi"}],
-    ) is False
+    assert (
+        CoastPolicy(text=_COAST_TEXT).should_nudge(
+            "stop",
+            _COASTED_CONTENT,
+            None,
+            _COASTED_CONTENT,
+            req["tools"],
+            [{"role": "user", "content": "hi"}],
+        )
+        is False
+    )
 
 
 def test_should_nudge_requires_stop_finish_reason():
     req = _loop_request()
-    assert CoastPolicy(text=_COAST_TEXT).should_nudge(
-        "length",
-        _COASTED_CONTENT,
-        None,
-        _COASTED_CONTENT,
-        req["tools"],
-        req["messages"],
-    ) is False
+    assert (
+        CoastPolicy(text=_COAST_TEXT).should_nudge(
+            "length",
+            _COASTED_CONTENT,
+            None,
+            _COASTED_CONTENT,
+            req["tools"],
+            req["messages"],
+        )
+        is False
+    )
 
 
 def test_apply_replays_coast_turn_and_appends_nudge():
@@ -218,9 +239,7 @@ class _MockServer:
         _MockHandler.chunks_by_request = chunks_by_request
         _MockHandler.requests = 0
         self.port = self.server.server_address[1]
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, daemon=True
-        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
     def stop(self):
@@ -256,9 +275,7 @@ def _run_forward(chunks_by_request, coast_max=2, enabled=True):
                 },
             )
             records = [
-                json.loads(line)
-                for line in open("/tmp/coast_integration.jsonl")
-                if line.strip()
+                json.loads(line) for line in open("/tmp/coast_integration.jsonl") if line.strip()
             ]
             return resp, records
 
@@ -279,16 +296,12 @@ def test_coasted_turn_is_reprompted_and_returns_tool_call():
     assert _MockHandler.requests == 2, _MockHandler.requests
     final = records[-1]
     assert final["coast"] == {"attempts": 1, "outcome": "succeeded"}, final
-    triggered = [
-        r for r in records if r.get("coast", {}).get("outcome") == "triggered"
-    ]
+    triggered = [r for r in records if r.get("coast", {}).get("outcome") == "triggered"]
     assert len(triggered) == 1, records
 
 
 def test_coast_budget_exhausted_returns_coasted_turn():
-    resp, records = _run_forward(
-        [_COAST_TURN, _COAST_TURN, _COAST_TURN], coast_max=2
-    )
+    resp, records = _run_forward([_COAST_TURN, _COAST_TURN, _COAST_TURN], coast_max=2)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     message = data["choices"][0]["message"]

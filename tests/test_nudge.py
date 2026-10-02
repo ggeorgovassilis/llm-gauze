@@ -53,28 +53,20 @@ _ANSWER_TURN = [
 
 
 def test_should_nudge_empty_turn():
-    assert NudgePolicy(text=_NUDGE).should_nudge(
-        "stop", "", None, "thinking"
-    ) is True
+    assert NudgePolicy(text=_NUDGE).should_nudge("stop", "", None, "thinking") is True
 
 
 def test_should_nudge_ignores_tool_calls():
     tool_calls = [{"id": "c", "function": {"name": "f", "arguments": "{}"}}]
-    assert NudgePolicy(text=_NUDGE).should_nudge(
-        "stop", "", tool_calls, "thinking"
-    ) is False
+    assert NudgePolicy(text=_NUDGE).should_nudge("stop", "", tool_calls, "thinking") is False
 
 
 def test_should_nudge_ignores_visible_content():
-    assert NudgePolicy(text=_NUDGE).should_nudge(
-        "stop", "hello", None, "thinking"
-    ) is False
+    assert NudgePolicy(text=_NUDGE).should_nudge("stop", "hello", None, "thinking") is False
 
 
 def test_should_nudge_requires_stop_finish_reason():
-    assert NudgePolicy(text=_NUDGE).should_nudge(
-        "length", "", None, "thinking"
-    ) is False
+    assert NudgePolicy(text=_NUDGE).should_nudge("length", "", None, "thinking") is False
 
 
 def test_should_nudge_requires_reasoning():
@@ -103,9 +95,7 @@ class _MockHandler(BaseHTTPRequestHandler):
     requests = 0
 
     def do_POST(self):
-        idx = min(
-            type(self).requests, len(type(self).chunks_by_request) - 1
-        )
+        idx = min(type(self).requests, len(type(self).chunks_by_request) - 1)
         type(self).requests += 1
         chunks = type(self).chunks_by_request[idx]
         self.send_response(200)
@@ -128,9 +118,7 @@ class _MockServer:
         _MockHandler.chunks_by_request = chunks_by_request
         _MockHandler.requests = 0
         self.port = self.server.server_address[1]
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, daemon=True
-        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
     def stop(self):
@@ -172,9 +160,7 @@ def _run_forward(chunks_by_request, nudge_max=2, stream=False):
                 },
             )
             records = [
-                json.loads(line)
-                for line in open("/tmp/nudge_integration.jsonl")
-                if line.strip()
+                json.loads(line) for line in open("/tmp/nudge_integration.jsonl") if line.strip()
             ]
             return resp, records
 
@@ -204,9 +190,7 @@ def test_empty_turn_is_nudged_and_returns_real_answer():
 def test_nudge_budget_exhausted_falls_back_to_placeholder():
     # Both requests return empty turns; with a budget of 1 the placeholder
     # floor is reached after one nudge.
-    resp, records = _run_forward(
-        [_EMPTY_TURN, _EMPTY_TURN], nudge_max=1
-    )
+    resp, records = _run_forward([_EMPTY_TURN, _EMPTY_TURN], nudge_max=1)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     message = data["choices"][0]["message"]

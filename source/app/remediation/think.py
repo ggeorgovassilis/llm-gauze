@@ -44,17 +44,12 @@ class ThinkContentGuard:
     ) -> None:
         self.tags = tuple(t.lower() for t in (tags or _DEFAULT_TAGS))
         self.placeholder = (
-            placeholder if placeholder is not None
-            else settings.think_empty_response_placeholder
+            placeholder if placeholder is not None else settings.think_empty_response_placeholder
         )
 
     @classmethod
     def from_settings(cls) -> "ThinkContentGuard":
-        tags = tuple(
-            s.strip()
-            for s in settings.think_tags.split(",")
-            if s.strip()
-        )
+        tags = tuple(s.strip() for s in settings.think_tags.split(",") if s.strip())
         return cls(tags or _DEFAULT_TAGS, settings.think_empty_response_placeholder)
 
     # --- public API --------------------------------------------------
@@ -81,9 +76,7 @@ class ThinkContentGuard:
         changes.extend(guard_changes)
         return content, reasoning, changes
 
-    def relocate(
-        self, content: str, reasoning: str = ""
-    ) -> tuple[str, str, list[dict]]:
+    def relocate(self, content: str, reasoning: str = "") -> tuple[str, str, list[dict]]:
         """Relocate leaked thinking tags only (no placeholder applied).
 
         The nudge rung inspects the relocated turn to decide whether to
@@ -112,16 +105,12 @@ class ThinkContentGuard:
         alternatives = "|".join(re.escape(t) for t in self.tags)
         # <tag>inner</tag> — DOTALL lets inner text span newlines; IGNORECASE
         # catches case variants. Non-greedy so the first closing tag wins.
-        return re.compile(
-            rf"<({alternatives})>(.*?)</\1>", re.IGNORECASE | re.DOTALL
-        )
+        return re.compile(rf"<({alternatives})>(.*?)</\1>", re.IGNORECASE | re.DOTALL)
 
     def _unmatched_pattern(self) -> re.Pattern:
         alternatives = "|".join(re.escape(t) for t in self.tags)
         # A trailing opening tag with no matching close: "<think>truncated…".
-        return re.compile(
-            rf"<({alternatives})>(.*)$", re.IGNORECASE | re.DOTALL
-        )
+        return re.compile(rf"<({alternatives})>(.*)$", re.IGNORECASE | re.DOTALL)
 
     def _relocate(
         self, content: str, reasoning: str, changes: list[dict]
@@ -166,11 +155,7 @@ class ThinkContentGuard:
         A tool-call turn has empty content by design, so it is exempt: the
         model answered with a tool invocation, not prose.
         """
-        if (
-            content.strip() == ""
-            and reasoning.strip() != ""
-            and not tool_calls
-        ):
+        if content.strip() == "" and reasoning.strip() != "" and not tool_calls:
             changes.append({"kind": "empty_content_placeholder"})
             return self.placeholder, changes
         return content, changes

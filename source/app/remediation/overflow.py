@@ -39,18 +39,9 @@ class MessageOverflowGuard:
         truncate: bool | None = None,
         warning: str | None = None,
     ) -> None:
-        self.threshold = (
-            threshold if threshold is not None
-            else settings.message_overflow_threshold
-        )
-        self.truncate = (
-            truncate if truncate is not None
-            else settings.message_overflow_truncate
-        )
-        self.warning = (
-            warning if warning is not None
-            else settings.message_overflow_warning
-        )
+        self.threshold = threshold if threshold is not None else settings.message_overflow_threshold
+        self.truncate = truncate if truncate is not None else settings.message_overflow_truncate
+        self.warning = warning if warning is not None else settings.message_overflow_warning
 
     @classmethod
     def from_settings(cls) -> "MessageOverflowGuard":

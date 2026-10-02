@@ -59,9 +59,7 @@ class _MockServer:
         self.server = HTTPServer(("127.0.0.1", 0), _MockHandler)
         _MockHandler.steps = steps
         self.port = self.server.server_address[1]
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, daemon=True
-        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
     def stop(self):
@@ -182,11 +180,7 @@ def test_stall_abort_records_partial_output():
         resp.status_code,
         resp.body,
     )
-    records = [
-        json.loads(line)
-        for line in open("/tmp/stall_integration.jsonl")
-        if line.strip()
-    ]
+    records = [json.loads(line) for line in open("/tmp/stall_integration.jsonl") if line.strip()]
     abort = [r for r in records if r.get("abort_kind") == "stalled"][-1]
     assert abort["partial_reasoning"] == "about to call a tool", abort
     assert abort["partial_content"] is None, abort

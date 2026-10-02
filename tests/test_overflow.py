@@ -186,9 +186,7 @@ class _MockServer:
         _CaptureHandler.captured_body = None
         _CaptureHandler.requests = 0
         self.port = self.server.server_address[1]
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, daemon=True
-        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
     def stop(self):
@@ -252,9 +250,7 @@ def _run_forward(loop_enabled, content, enabled=True):
 
         resp = asyncio.run(run())
         records = [
-            json.loads(line)
-            for line in open("/tmp/overflow_integration.jsonl")
-            if line.strip()
+            json.loads(line) for line in open("/tmp/overflow_integration.jsonl") if line.strip()
         ]
         captured = json.loads(_CaptureHandler.captured_body)
         return resp, records, captured
@@ -281,9 +277,7 @@ def test_streaming_forward_truncates_before_upstream():
 
 
 def test_disabled_is_noop():
-    resp, records, captured = _run_forward(
-        False, "first line\n" + "x" * 1000, enabled=False
-    )
+    resp, records, captured = _run_forward(False, "first line\n" + "x" * 1000, enabled=False)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     # The upstream received the full, unmodified tool result.
     assert captured["messages"][1]["content"] == "first line\n" + "x" * 1000

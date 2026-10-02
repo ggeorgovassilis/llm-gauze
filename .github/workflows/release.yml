@@ -1,9 +1,13 @@
 name: Cut release
 
 # The single manual step of the release process: supply the next incrementing
-# version number (e.g. 7) and this workflow tags `v7` and pushes it. The tag
-# push then triggers `.github/workflows/publish.yml`, which builds, publishes,
-# and creates the GitHub Release.
+# version number (e.g. 7). This workflow tags `v7`, pushes it, then calls
+# `.github/workflows/publish.yml` directly (a reusable workflow) so the image
+# build + GitHub Release happen in the *same* run.
+#
+# Cross-workflow triggering (pushing a tag and hoping another workflow fires on
+# it) is deliberately avoided: a tag pushed with GITHUB_TOKEN does not trigger
+# a second workflow. Calling the reusable workflow is explicit and reliable.
 #
 # CI never invents the version — the number is a human decision supplied as an
 # input. The tag remains the single source of truth.
@@ -15,8 +19,11 @@ on:
         description: "Version number (e.g. 7)"
         required: true
 
+# Permissions are granted here (not in the reusable workflow): a called
+# workflow inherits its permissions from the caller.
 permissions:
   contents: write
+  packages: write
 
 jobs:
   tag:
@@ -26,14 +33,15 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Create and push tag
-        env:
-          # A PAT (not GITHUB_TOKEN) is required: a tag pushed with the default
-          # GITHUB_TOKEN does not trigger the `Publish` workflow (GitHub blocks
-          # GITHUB_TOKEN from spawning downstream workflow runs).
-          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${{ github.repository }}.git"
           git tag "v${{ inputs.version }}"
           git push origin "v${{ inputs.version }}"
+
+  publish:
+    name: Publish image + release
+    needs: tag
+    uses: ./.github/workflows/publish.yml
+    with:
+      version: ${{ inputs.version }}

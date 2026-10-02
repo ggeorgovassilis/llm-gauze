@@ -1,12 +1,15 @@
 name: Publish
 
+# Reusable workflow: called directly by `.github/workflows/release.yml` via
+# `workflow_call`. Kept separate so the release workflow reuses (not duplicates)
+# the test/build/push/release steps. Permissions are inherited from the caller.
 on:
-  push:
-    tags:
-      - 'v*'
-
-permissions:
-  contents: read
+  workflow_call:
+    inputs:
+      version:
+        description: "Version number (e.g. 7)"
+        required: true
+        type: string
 
 jobs:
   test:
@@ -35,15 +38,8 @@ jobs:
     name: Publish image + release
     runs-on: ubuntu-24.04
     needs: [test]
-    permissions:
-      contents: write
-      packages: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Extract version from tag
-        id: version
-        run: echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
       - name: Compute lowercase image name
         id: image
@@ -70,7 +66,7 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ${{ steps.image.outputs.name }}:${{ steps.version.outputs.value }}
+            ${{ steps.image.outputs.name }}:${{ inputs.version }}
             ${{ steps.image.outputs.name }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -78,4 +74,4 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "v${{ inputs.version }}" --generate-notes

@@ -60,6 +60,20 @@ failure ──▶ Detector (understanding) ──▶ Diagnosis ──▶ Backoff
 - `app/remediation/think.py` — `ThinkContentGuard`, a *transform* (not a
   `Detector`) that relocates leaked thinking tags out of visible content and
   guarantees a non-empty reply.
+- `app/remediation/overflow.py` — `MessageOverflowGuard`, a request-side
+  *transform* that warns/truncates oversized tool results (distinct from
+  `context.py`'s response-side `ContextWindowDetector`).
+- `app/remediation/nudge.py` — `NudgePolicy`, re-prompt a turn that finished
+  empty (reasoning only, no content, no tool calls).
+- `app/remediation/coast.py` — `CoastPolicy`, re-prompt a turn that announced
+  a tool call but did not make one.
+- `app/remediation/runaway.py` — `RunawayReasoningDetector` /
+  `RunawayReasoningPolicy`, flag and re-prompt a turn that reasons endlessly
+  without ever producing content.
+- `app/remediation/tool_call.py` — `ToolCallGuard`, a *transform* that
+  validates/repairs/flags malformed tool-call JSON.
+- `app/remediation/loop_retry.py` — `LoopRetryPolicy`, re-submit a looped
+  request with varied sampling (behaviour described under Loop detection).
 
 `RetryableDetector` classifies transport-level failures **by category**
 (`httpx.RequestError`, `OSError`, `TimeoutError`) rather than enumerating every
@@ -235,6 +249,72 @@ Extracting a *usable answer* from the relocated chain-of-thought is deliberately
 out of scope here (see #13): it is not deterministically fixable, and surfacing
 raw reasoning as content would be a quality regression.
 
+## Coast detection
+
+A sibling of the nudge rung above, but for the *opposite* shape of turn: the
+model announced work and then did none. Mid-way through a multi-step tool loop,
+some models end a turn with `finish_reason: stop`, non-empty visible `content`,
+and no `tool_calls` — even though the request's `tools` list was non-empty and
+the conversation already contains a prior assistant tool-call turn. The model
+"coasted": it regurgitated its memorised status line ("Chunk 5 done … Pulling
+next chunk.") without actually generating the call. Copilot's agent loop only
+continues while the assistant emits tool calls, so such a turn ends the
+workflow silently — no error, no crash, no user indication (see #16).
+
+Where nudge fires on *empty* turns, coast fires on *non-empty* turns whose
+chain-of-thought collapsed to be byte-identical with the visible content — the
+deterministic "coasting" fingerprint observed in the incident.
+
+- `CoastPolicy.should_nudge(finish_reason, content, tool_calls, reasoning,
+  tools, messages)` is a pure predicate over the assembled turn: stop +
+  non-empty content + no tool calls + non-empty `tools` list + a prior
+  assistant tool-call turn + reasoning byte-identical to content. Deterministic
+  — no heuristics.
+- `CoastPolicy.apply(body, content)` replays the coasted assistant message into
+  the conversation and appends the re-prompt (`COAST_NUDGE_TEXT`). Unlike nudge
+  (whose empty turn left nothing in context), the coasted message is replayed
+  so the re-prompt refers to something the model actually said.
+- The re-submitted request reuses the streaming path unchanged; the budget is
+  `COAST_MAX_ATTEMPTS`, and each pass is recorded with an `outcome`
+  (`triggered`, `succeeded`, or `exhausted`) so the intervention is visible in
+  `records.jsonl`.
+- On exhaustion the coasted turn is returned as-is (visible content, no tool
+  call, logged outcome) rather than synthesising anything.
+
+The master switch is `COAST_DETECTION_ENABLED`.
+
+## Runaway-reasoning detection
+
+Some models, instead of producing a visible answer (or a tool call), emit a
+continuous stream of *reasoning* tokens that never resolves into content. This
+is invisible to both other watchdogs: the reasoning is non-repeating (high
+entropy), so the loop detector — which looks for low entropy / verbatim
+repetition — cannot see it; and tokens are flowing, so the stall watchdog —
+which looks for *silence* — cannot see it either. The turn simply runs until it
+hits the output-window limit and terminates with `finish_reason: "length"` and
+an empty reply (see #17).
+
+The fingerprint is the invariant **reasoning tokens keep flowing while content
+tokens stay at zero**. Two windows observe it:
+
+1. **Proactive (streaming)** — `RunawayReasoningDetector`, a token-count
+   watchdog over the reasoning stream. Once the reasoning token budget
+   (`RUNAWAY_REASONING_TOKEN_THRESHOLD`, ~4 chars/token) is exceeded with no
+   content or tool call yet produced, the stream is aborted early so the
+   remaining output budget can be spent on a retry that actually answers. Like
+   `StallDetector` it is driven manually by the streaming loop, not through
+   `StreamDetector.feed()`.
+2. **Terminal** — the output window was exhausted (`finish_reason: "length"`)
+   with reasoning present but no content and no tool calls: the model burned
+   its entire budget thinking.
+
+Remediation mirrors the nudge rung: `RunawayReasoningPolicy.apply(body)` appends
+a stop-thinking instruction (`RUNAWAY_REASONING_NUDGE_TEXT`) and re-submits,
+capped by `RUNAWAY_REASONING_MAX_ATTEMPTS`. On exhaustion the gateway returns
+`RUNAWAY_REASONING_ABORT_STATUS` (default 502).
+
+The master switch is `RUNAWAY_REASONING_ENABLED`.
+
 ## Tool-call syntax enforcement
 
 Local models sometimes emit malformed or truncated tool calls: unbalanced
@@ -264,6 +344,36 @@ out of scope: the gateway does not know the tool schema. This guard only ensures
 `arguments` is *well-formed JSON*.
 
 
+## Message overflow
+
+A tool result can be arbitrarily large, and a local model has no way to know it
+should summarise or skip it — it just receives a huge `role: "tool"` message
+that silently eats its context window (see #15). This guard is the
+*request-side* mirror of think-cleanup: before the request is forwarded
+upstream, any `role: "tool"` message whose content exceeds a threshold is (a)
+warned and (b) optionally truncated to a bounded prefix.
+
+This is distinct from **context-window overflow** above, which recognises the
+upstream's *response-side* "context filled" error. Message overflow runs
+*request-side*, before the model ever sees the oversized tool result.
+
+- `MessageOverflowGuard.process(body)` returns `(body, changes)`: the request
+  with oversized tool results rewritten, plus a list of `tool_overflow` change
+  records for the recorder. The input is never mutated; when nothing trips the
+  threshold the original dict is returned unchanged.
+- The trigger is a pure size comparison — character count vs
+  `MESSAGE_OVERFLOW_THRESHOLD` — no fuzzy heuristics. Characters (not bytes) so
+  the trigger and the truncation prefix share one unit.
+- Only `role: "tool"` messages are touched: they are the one input the model
+  *requested and can re-request more cheaply*, so the warning is actionable.
+  `user`/`system`/`assistant` content is never modified.
+- When `MESSAGE_OVERFLOW_TRUNCATE` is true, the content is truncated to a
+  bounded prefix; the warning (`MESSAGE_OVERFLOW_WARNING`) is prepended either
+  way.
+
+The master switch is `MESSAGE_OVERFLOW_ENABLED`.
+
+
 ## Timeout model
 
 A single request timeout is not enough: the same value applied to *connecting*
@@ -286,7 +396,8 @@ JSONL store is the shared substrate every subsequent phase reads from.
 1. **Stub** — compose, forwarding gateway, `.env` config, logging. ✅
 2. **Retry** — retry transient upstream failures with configurable exponential
    backoff, separated into collection/understanding/action. ✅
-3. **Detection** (current) — analyse recorded exchanges, classify further
-   failures.
-4. **Remediation** — sloppy-response cleanup, loop/context detection.
-5. **Streaming** — SSE pass-through and per-chunk handling.
+3. **Detection** — analyse recorded exchanges, classify further failures. ✅
+4. **Remediation** — loop/context/message-overflow/coast/runaway detection and
+   the nudge/think-cleanup/tool-repair transforms. ✅
+5. **Streaming** — SSE pass-through, per-chunk handling, and rebuilt streams
+   after a transform. ✅

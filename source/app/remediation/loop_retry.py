@@ -61,7 +61,7 @@ class LoopRetryPolicy:
         """Return a copy of the request body with varied sampling parameters.
 
         Model-appropriate sampling is the client's and endpoint's domain, so
-        bandaid never invents values: a parameter the client *did* submit is
+        llm-gauze never invents values: a parameter the client *did* submit is
         nudged upward by ``increment`` (0.1); one it did *not* submit is set to
         the configured fallback. ``repeat_penalty`` is a llama.cpp-native knob
         surfaced through the upstream's OpenAI-compatible API; setting it

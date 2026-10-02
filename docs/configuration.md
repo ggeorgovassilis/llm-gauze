@@ -1,6 +1,6 @@
 # Configuration
 
-Bandaid is configured entirely through environment variables (read from
+llm-gauze is configured entirely through environment variables (read from
 `.env`). Copy `.env.example` to `.env` and adjust. Every setting is listed
 below, grouped by feature, with its default.
 

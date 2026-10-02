@@ -24,12 +24,12 @@ jobs:
           context: .
           target: test
           load: true
-          tags: bandaid:test
+          tags: llm-gauze:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Run tests
-        run: docker run --rm bandaid:test pytest
+        run: docker run --rm llm-gauze:test pytest
 
   publish:
     name: Publish image + release

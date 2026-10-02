@@ -1,6 +1,6 @@
 # Developing
 
-This is the developer guide for bandaid. Public users should follow the
+This is the developer guide for llm-gauze. Public users should follow the
 [README](README.md).
 
 ## Prerequisites

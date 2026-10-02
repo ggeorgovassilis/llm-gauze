@@ -34,7 +34,7 @@ from app.remediation.think import ThinkContentGuard
 from app.remediation.tool_call import ToolCallGuard
 from app.telemetry import telemetry
 
-logger = logging.getLogger("bandaid.proxy")
+logger = logging.getLogger("llm_gauze.proxy")
 
 # Headers that must not be forwarded verbatim (RFC 7230 hop-by-hop headers).
 HOP_BY_HOP_HEADERS = {

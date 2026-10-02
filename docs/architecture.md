@@ -1,6 +1,6 @@
 # Architecture
 
-Bandaid is an HTTP gateway layered in front of a local LLM. This document
+llm-gauze is an HTTP gateway layered in front of a local LLM. This document
 captures the intended design so later phases stay aligned.
 
 ## Principles
@@ -105,7 +105,7 @@ transport/status failures), so the gateway observes output as it is generated:
 
 A detected **loop** is first *remediated* before giving up: the request is
 re-submitted with varied sampling. Model-appropriate sampling is the client's
-and endpoint's domain, so bandaid never invents values — a sampling parameter
+and endpoint's domain, so llm-gauze never invents values — a sampling parameter
 the client already submitted is nudged up by `LOOP_RETRY_INCREMENT` (0.1); one
 it did *not* submit is set to its configured fallback. The parameters affected
 are `temperature`, `repeat_penalty` (llama.cpp), `presence_penalty` and
@@ -181,9 +181,9 @@ the retry decision:
 - A match produces `Diagnosis(retryable=False, code="context_window_exceeded")`,
   which short-circuits the retry loop. The upstream's own error is then
   forwarded **verbatim** (its status and body — token count, `n_ctx`, fix
-  hints — are passed through unchanged) rather than translated into a bandaid
+  hints — are passed through unchanged) rather than translated into an llm-gauze
   message. Only when no upstream body is available (e.g. the overflow arrived
-  as an exception message) does bandaid synthesise a minimal named
+  as an exception message) does llm-gauze synthesise a minimal named
   `context_window_exceeded` error with `context_window_abort_status` (default
   413).
 - The detector inspects both the buffered forward path (response body) and the

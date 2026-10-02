@@ -13,7 +13,7 @@ import time
 import uuid
 from pathlib import Path
 
-logger = logging.getLogger("bandaid.recorder")
+logger = logging.getLogger("llm_gauze.recorder")
 
 
 class Recorder:

@@ -1,6 +1,6 @@
-# Bandaid
+# llm-gauze
 
-Bandaid is an HTTP gateway that sits in front of a local LLM (served via an
+llm-gauze is an HTTP gateway that sits in front of a local LLM (served via an
 OpenAI-compatible API) and works around its shortcomings: transient errors
 without retries, silently hung or looping models, empty or sloppy responses,
 context-window overflows, runaway reasoning, and malformed tool calls. It
@@ -9,7 +9,7 @@ it.
 
 ## Quick start
 
-Bandaid ships as a published container image and runs with Docker Compose.
+llm-gauze ships as a published container image and runs with Docker Compose.
 
 1. Create your configuration:
 
@@ -27,9 +27,9 @@ Bandaid ships as a published container image and runs with Docker Compose.
    docker compose up
    ```
 
-   This runs the published image `ghcr.io/ggeorgovassilis/bandaid:latest`
+   This runs the published image `ghcr.io/ggeorgovassilis/llm-gauze:latest`
    (defined in `docker-compose.yml`). To pin a specific release, override the
-   tag — for example `ghcr.io/ggeorgovassilis/bandaid:7`.
+   tag — for example `ghcr.io/ggeorgovassilis/llm-gauze:7`.
 
 The gateway listens on `http://localhost:9317` and exposes an
 OpenAI-compatible API (e.g. `POST /v1/chat/completions`), forwarding to the
@@ -62,23 +62,23 @@ Every setting is documented in [`docs/configuration.md`](docs/configuration.md).
 
 ## How it works
 
-Bandaid sits between your client and the local LLM, recording every exchange:
+llm-gauze sits between your client and the local LLM, recording every exchange:
 
 ```mermaid
 flowchart LR
-    Client[Your client] -->|OpenAI-compatible API| Bandaid
-    Bandaid -->|forwards| LLM[Local LLM]
-    Bandaid -.->|logs every exchange| Store[(data/*.jsonl)]
+    Client[Your client] -->|OpenAI-compatible API| Gauze[llm-gauze]
+    Gauze -->|forwards| LLM[Local LLM]
+    Gauze -.->|logs every exchange| Store[(data/*.jsonl)]
 ```
 
-When the model misbehaves, bandaid detects it and remediates what it can before
+When the model misbehaves, llm-gauze detects it and remediates what it can before
 you ever see it — retrying transient failures, nudging empty replies, cleaning
 leaked thinking tags, breaking loops with varied sampling:
 
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant B as Bandaid
+    participant B as llm-gauze
     participant L as Local LLM
 
     C->>B: POST /v1/chat/completions

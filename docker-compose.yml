@@ -1,4 +1,4 @@
-# Run bandaid from the published GHCR image — the path a public user follows.
+# Run llm-gauze from the published GHCR image — the path a public user follows.
 #
 # This is the "consume" compose file: it pulls the published image (no build, no
 # source mount). Point `LLM_BASE_URL` in `.env` at your local LLM, then:
@@ -6,14 +6,14 @@
 #     docker compose up
 #
 # To pin a specific release instead of `latest`, override the image tag, e.g.
-# `ghcr.io/ggeorgovassilis/bandaid:7`.
+# `ghcr.io/ggeorgovassilis/llm-gauze:7`.
 #
 # For local development (build from source + live code mount), use
 # `docker-compose.dev.yml` via `./scripts/dev.sh`.
 
 services:
   gateway:
-    image: ghcr.io/ggeorgovassilis/bandaid:latest
+    image: ghcr.io/ggeorgovassilis/llm-gauze:latest
     # Run as the host user (UID/GID, default 1000) so the bind-mounted data/
     # directory stays writable and owned by you, not root.
     user: "${UID:-1000}:${GID:-1000}"

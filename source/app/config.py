@@ -89,7 +89,7 @@ class Settings(BaseSettings):
 
     # By how much to *increase* a sampling parameter the client already
     # submitted. Model-appropriate sampling is the client's and endpoint's
-    # domain, so bandaid never invents values — it only nudges the client's
+    # domain, so llm-gauze never invents values — it only nudges the client's
     # own values upward by this delta.
     loop_retry_increment: float = 0.1
 

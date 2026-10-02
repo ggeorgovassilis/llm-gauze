@@ -11,7 +11,7 @@ import httpx
 
 from app.remediation.base import Backoff, Detector, Diagnosis
 
-logger = logging.getLogger("bandaid.remediation.retry")
+logger = logging.getLogger("llm_gauze.remediation.retry")
 
 # Transport-level failures mean "no valid response was received", which is
 # almost always safe to retry against a flaky local LLM. We therefore classify

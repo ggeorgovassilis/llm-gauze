@@ -23,18 +23,18 @@ jobs:
           context: .
           target: test
           load: true
-          tags: bandaid:test
+          tags: llm-gauze:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Lint (ruff check)
-        run: docker run --rm bandaid:test ruff check source tests
+        run: docker run --rm llm-gauze:test ruff check source tests
 
       - name: Format check (ruff format)
-        run: docker run --rm bandaid:test ruff format --check source tests
+        run: docker run --rm llm-gauze:test ruff format --check source tests
 
       - name: Type check (mypy)
-        run: docker run --rm bandaid:test mypy source
+        run: docker run --rm llm-gauze:test mypy source
 
   test:
     name: Test (Docker)
@@ -51,12 +51,12 @@ jobs:
           context: .
           target: test
           load: true
-          tags: bandaid:test
+          tags: llm-gauze:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Run tests
-        run: docker run --rm bandaid:test pytest
+        run: docker run --rm llm-gauze:test pytest
 
   build:
     name: Build & boot check
@@ -73,14 +73,14 @@ jobs:
           context: .
           target: runtime
           load: true
-          tags: bandaid:runtime
+          tags: llm-gauze:runtime
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Boot check
         run: |
-          docker run -d --name bandaid -p 8000:8000 bandaid:runtime
-          trap 'docker rm -f bandaid >/dev/null 2>&1' EXIT
+          docker run -d --name llm-gauze -p 8000:8000 llm-gauze:runtime
+          trap 'docker rm -f llm-gauze >/dev/null 2>&1' EXIT
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:8000/health >/dev/null; then
               echo "health endpoint OK"
@@ -89,5 +89,5 @@ jobs:
             sleep 1
           done
           echo "health endpoint did not come up" >&2
-          docker logs bandaid
+          docker logs llm-gauze
           exit 1

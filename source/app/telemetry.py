@@ -1,6 +1,6 @@
 """In-process metrics registry and exposition.
 
-Bandaid's telemetry surface: a small set of counters, a latency histogram, and
+llm-gauze's telemetry surface: a small set of counters, a latency histogram, and
 an upstream-down gauge, held in memory and exposed over HTTP at ``/metrics``.
 
 Deliberately dependency-free — a ``threading.Lock`` plus plain dicts, no

@@ -1,4 +1,4 @@
-"""Bandaid gateway entrypoint.
+"""llm-gauze gateway entrypoint.
 
 Exposes an OpenAI-compatible API and forwards everything to the configured
 local LLM provider, recording every exchange along the way.
@@ -19,13 +19,13 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
-logger = logging.getLogger("bandaid")
+logger = logging.getLogger("llm_gauze")
 
 record_path = Path(settings.data_dir) / settings.record_file
 recorder = Recorder(record_path)
 proxy = Proxy(recorder)
 
-app = FastAPI(title="Bandaid Gateway")
+app = FastAPI(title="llm-gauze Gateway")
 
 router = APIRouter()
 
@@ -56,4 +56,4 @@ async def catch_all(request: Request, path: str) -> Response:
 
 app.include_router(router)
 
-logger.info("Bandaid gateway ready, forwarding to %s", settings.llm_base_url)
+logger.info("llm-gauze gateway ready, forwarding to %s", settings.llm_base_url)

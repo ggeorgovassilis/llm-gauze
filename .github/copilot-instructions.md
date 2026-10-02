@@ -25,3 +25,10 @@ This project is an LLM gateway that detects and remediates shortcommings of loca
 - `source/` - Source code
 - `tests/` - Tests
 - `scripts/` - Wrapper scripts
+
+# Implementing features
+- Always work with a github ticket
+- Create a branch for each tickcet, work in there
+- Submit a pull request when done
+- Have the user review the pull request
+- Merge the pull request once the user approves it and close the associated ticket

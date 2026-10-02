@@ -13,27 +13,18 @@ floor is reached when nudging keeps failing.
 
 import asyncio
 import json
-import threading
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from app.config import settings
 from app.proxy import Proxy
 from app.recorder import Recorder
 from app.remediation.nudge import NudgePolicy
+from mock_upstream import MockUpstream, chunk, settings_override
 
 _NUDGE = "PLEASE_REPLY_VISIBLY"
 _PLACEHOLDER = "THE_PLACEHOLDER"
 
 
-def _chunk(delta: dict, finish_reason=None) -> dict:
-    return {
-        "id": "chatcmpl-nudge",
-        "object": "chat.completion.chunk",
-        "created": 1,
-        "model": "test",
-        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
-    }
+_chunk = chunk
 
 
 # A reasoning-only turn: stop, no content, no tool calls, non-empty reasoning.
@@ -90,53 +81,18 @@ def test_apply_does_not_mutate_input():
 # --- integration harness ---------------------------------------------
 
 
-class _MockHandler(BaseHTTPRequestHandler):
-    chunks_by_request: list = []
-    requests = 0
-
-    def do_POST(self):
-        idx = min(type(self).requests, len(type(self).chunks_by_request) - 1)
-        type(self).requests += 1
-        chunks = type(self).chunks_by_request[idx]
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.end_headers()
-        for chunk in chunks:
-            try:
-                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                break
-
-    def log_message(self, *args):  # silence request logging
-        pass
-
-
-class _MockServer:
-    def __init__(self, chunks_by_request):
-        self.server = HTTPServer(("127.0.0.1", 0), _MockHandler)
-        _MockHandler.chunks_by_request = chunks_by_request
-        _MockHandler.requests = 0
-        self.port = self.server.server_address[1]
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-
-    def stop(self):
-        self.server.shutdown()
-
-
 def _run_forward(chunks_by_request, nudge_max=2, stream=False):
-    mock = _MockServer(chunks_by_request)
-    try:
-
-        async def run():
-            settings.llm_base_url = f"http://127.0.0.1:{mock.port}"
-            settings.loop_detection_enabled = True
-            settings.think_cleanup_enabled = True
-            settings.think_empty_response_placeholder = _PLACEHOLDER
-            settings.think_nudge_enabled = True
-            settings.think_nudge_text = _NUDGE
-            settings.think_nudge_max_attempts = nudge_max
+    specs = [{"chunks": turn} for turn in chunks_by_request]
+    with MockUpstream(specs) as mock:
+        with settings_override(
+            llm_base_url=mock.url,
+            loop_detection_enabled=True,
+            think_cleanup_enabled=True,
+            think_empty_response_placeholder=_PLACEHOLDER,
+            think_nudge_enabled=True,
+            think_nudge_text=_NUDGE,
+            think_nudge_max_attempts=nudge_max,
+        ):
             recorder = Recorder("/tmp/nudge_integration.jsonl")
             proxy = Proxy(recorder)
             req = {
@@ -146,38 +102,41 @@ def _run_forward(chunks_by_request, nudge_max=2, stream=False):
             if stream:
                 req["stream"] = True
             body = json.dumps(req).encode()
-            resp = await proxy._forward_streaming(
-                request_id="nudge-itest",
-                method="POST",
-                url="/v1/chat/completions",
-                query="",
-                body=body,
-                headers={"content-type": "application/json"},
-                base_entry={
-                    "request_id": "nudge-itest",
-                    "method": "POST",
-                    "path": "/v1/chat/completions",
-                },
-            )
-            records = [
-                json.loads(line) for line in open("/tmp/nudge_integration.jsonl") if line.strip()
-            ]
-            return resp, records
 
-        return asyncio.run(run())
-    finally:
-        mock.stop()
+            async def run():
+                resp = await proxy._forward_streaming(
+                    request_id="nudge-itest",
+                    method="POST",
+                    url="/v1/chat/completions",
+                    query="",
+                    body=body,
+                    headers={"content-type": "application/json"},
+                    base_entry={
+                        "request_id": "nudge-itest",
+                        "method": "POST",
+                        "path": "/v1/chat/completions",
+                    },
+                )
+                records = [
+                    json.loads(line)
+                    for line in open("/tmp/nudge_integration.jsonl")
+                    if line.strip()
+                ]
+                return resp, records
+
+            resp, records = asyncio.run(run())
+            return resp, records, mock.request_count
 
 
 def test_empty_turn_is_nudged_and_returns_real_answer():
-    resp, records = _run_forward([_EMPTY_TURN, _ANSWER_TURN], nudge_max=2)
+    resp, records, count = _run_forward([_EMPTY_TURN, _ANSWER_TURN], nudge_max=2)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     message = data["choices"][0]["message"]
     assert message["content"] == "the real answer", message
 
     # Two upstream requests: the empty turn and the nudged retry.
-    assert _MockHandler.requests == 2, _MockHandler.requests
+    assert count == 2, count
     # The final record reports a successful nudge.
     final = records[-1]
     assert final["nudge"] == {"attempts": 1, "outcome": "succeeded"}, final
@@ -190,24 +149,24 @@ def test_empty_turn_is_nudged_and_returns_real_answer():
 def test_nudge_budget_exhausted_falls_back_to_placeholder():
     # Both requests return empty turns; with a budget of 1 the placeholder
     # floor is reached after one nudge.
-    resp, records = _run_forward([_EMPTY_TURN, _EMPTY_TURN], nudge_max=1)
+    resp, records, count = _run_forward([_EMPTY_TURN, _EMPTY_TURN], nudge_max=1)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     message = data["choices"][0]["message"]
     assert message["content"] == _PLACEHOLDER, message
     assert message["reasoning_content"] == "thinking hard", message
 
-    assert _MockHandler.requests == 2, _MockHandler.requests
+    assert count == 2, count
     final = records[-1]
     assert final["nudge"] == {"attempts": 1, "outcome": "exhausted"}, final
 
 
 def test_no_nudge_when_content_present():
     # A healthy first turn must not trigger a re-submission at all.
-    resp, records = _run_forward([_ANSWER_TURN], nudge_max=2)
+    resp, records, count = _run_forward([_ANSWER_TURN], nudge_max=2)
     data = json.loads(resp.body)
     assert data["choices"][0]["message"]["content"] == "the real answer", data
-    assert _MockHandler.requests == 1, _MockHandler.requests
+    assert count == 1, count
     assert records[-1].get("nudge") is None, records[-1]
 
 

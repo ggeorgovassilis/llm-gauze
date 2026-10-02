@@ -11,14 +11,12 @@ gateway repairs it (and does not crash on unfixable input).
 
 import asyncio
 import json
-import threading
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from app.config import settings
 from app.proxy import Proxy
 from app.recorder import Recorder
 from app.remediation.tool_call import ToolCallGuard
+from mock_upstream import MockUpstream, chunk, settings_override
 
 
 def _guard():
@@ -122,54 +120,16 @@ def test_repairs_second_call_and_flags_first():
 # --- integration harness ---------------------------------------------
 
 
-def _chunk(delta: dict, finish_reason=None) -> dict:
-    return {
-        "id": "chatcmpl-toolcall",
-        "object": "chat.completion.chunk",
-        "created": 1,
-        "model": "test",
-        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
-    }
-
-
-class _MockHandler(BaseHTTPRequestHandler):
-    chunks: list = []
-
-    def do_POST(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.end_headers()
-        for chunk in type(self).chunks:
-            try:
-                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                break
-
-    def log_message(self, *args):  # silence request logging
-        pass
-
-
-class _MockServer:
-    def __init__(self, chunks):
-        self.server = HTTPServer(("127.0.0.1", 0), _MockHandler)
-        _MockHandler.chunks = chunks
-        self.port = self.server.server_address[1]
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-
-    def stop(self):
-        self.server.shutdown()
+_chunk = chunk
 
 
 def _run_forward(chunks):
-    mock = _MockServer(chunks)
-    try:
-
-        async def run():
-            settings.llm_base_url = f"http://127.0.0.1:{mock.port}"
-            settings.loop_detection_enabled = True
-            settings.tool_call_guard_enabled = True
+    with MockUpstream([{"chunks": chunks}]) as mock:
+        with settings_override(
+            llm_base_url=mock.url,
+            loop_detection_enabled=True,
+            tool_call_guard_enabled=True,
+        ):
             recorder = Recorder("/tmp/tool_call_integration.jsonl")
             proxy = Proxy(recorder)
             req = {
@@ -177,29 +137,29 @@ def _run_forward(chunks):
                 "messages": [{"role": "user", "content": "hi"}],
             }
             body = json.dumps(req).encode()
-            resp = await proxy._forward_streaming(
-                request_id="toolcall-itest",
-                method="POST",
-                url="/v1/chat/completions",
-                query="",
-                body=body,
-                headers={"content-type": "application/json"},
-                base_entry={
-                    "request_id": "toolcall-itest",
-                    "method": "POST",
-                    "path": "/v1/chat/completions",
-                },
-            )
-            records = [
-                json.loads(line)
-                for line in open("/tmp/tool_call_integration.jsonl")
-                if line.strip()
-            ]
-            return resp, records
 
-        return asyncio.run(run())
-    finally:
-        mock.stop()
+            async def run():
+                resp = await proxy._forward_streaming(
+                    request_id="toolcall-itest",
+                    method="POST",
+                    url="/v1/chat/completions",
+                    query="",
+                    body=body,
+                    headers={"content-type": "application/json"},
+                    base_entry={
+                        "request_id": "toolcall-itest",
+                        "method": "POST",
+                        "path": "/v1/chat/completions",
+                    },
+                )
+                records = [
+                    json.loads(line)
+                    for line in open("/tmp/tool_call_integration.jsonl")
+                    if line.strip()
+                ]
+                return resp, records
+
+            return asyncio.run(run())
 
 
 def test_truncated_tool_call_is_repaired_end_to_end():

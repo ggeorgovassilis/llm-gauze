@@ -15,29 +15,20 @@ flagged; and the disabled switch leaves the terminal turn as a plain loop.
 import asyncio
 import json
 import random
-import threading
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from app.config import settings
 from app.proxy import Proxy
 from app.recorder import Recorder
 from app.remediation.runaway import (
     RunawayReasoningDetector,
     RunawayReasoningPolicy,
 )
+from mock_upstream import MockUpstream, chunk, settings_override
 
 _NUDGE_TEXT = "STOP_THINKING_ANSWER_NOW"
 
 
-def _chunk(delta: dict, finish_reason=None) -> dict:
-    return {
-        "id": "chatcmpl-runaway",
-        "object": "chat.completion.chunk",
-        "created": 1,
-        "model": "test",
-        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
-    }
+_chunk = chunk
 
 
 def _reasoning(text: str) -> dict:
@@ -112,90 +103,58 @@ def test_policy_appends_nudge_without_mutation():
 # --- integration harness ---------------------------------------------
 
 
-class _MockHandler(BaseHTTPRequestHandler):
-    chunks_by_request: list = []
-    requests = 0
-
-    def do_POST(self):
-        idx = min(type(self).requests, len(type(self).chunks_by_request) - 1)
-        type(self).requests += 1
-        chunks = type(self).chunks_by_request[idx]
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.end_headers()
-        for chunk in chunks:
-            try:
-                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                break
-
-    def log_message(self, *args):  # silence request logging
-        pass
-
-
-class _MockServer:
-    def __init__(self, chunks_by_request):
-        self.server = HTTPServer(("127.0.0.1", 0), _MockHandler)
-        _MockHandler.chunks_by_request = chunks_by_request
-        _MockHandler.requests = 0
-        self.port = self.server.server_address[1]
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-
-    def stop(self):
-        self.server.shutdown()
-
-
 def _run_forward(chunks_by_request, *, enabled=True, max_attempts=2, loop_retry=False):
-    mock = _MockServer(chunks_by_request)
-    try:
-
-        async def run():
-            settings.llm_base_url = f"http://127.0.0.1:{mock.port}"
-            settings.loop_detection_enabled = True
-            settings.think_cleanup_enabled = False
-            settings.think_nudge_enabled = False
-            settings.coast_detection_enabled = False
-            settings.loop_retry_enabled = loop_retry
-            settings.runaway_reasoning_enabled = enabled
-            settings.runaway_reasoning_nudge_text = _NUDGE_TEXT
-            settings.runaway_reasoning_max_attempts = max_attempts
-            settings.runaway_reasoning_token_threshold = 2000
+    specs = [{"chunks": turn} for turn in chunks_by_request]
+    with MockUpstream(specs) as mock:
+        with settings_override(
+            llm_base_url=mock.url,
+            loop_detection_enabled=True,
+            think_cleanup_enabled=False,
+            think_nudge_enabled=False,
+            coast_detection_enabled=False,
+            loop_retry_enabled=loop_retry,
+            runaway_reasoning_enabled=enabled,
+            runaway_reasoning_nudge_text=_NUDGE_TEXT,
+            runaway_reasoning_max_attempts=max_attempts,
+            runaway_reasoning_token_threshold=2000,
+        ):
             recorder = Recorder("/tmp/runaway_integration.jsonl")
             proxy = Proxy(recorder)
             body = json.dumps(
                 {"model": "test", "messages": [{"role": "user", "content": "q"}]}
             ).encode()
-            resp = await proxy._forward_streaming(
-                request_id="runaway-itest",
-                method="POST",
-                url="/v1/chat/completions",
-                query="",
-                body=body,
-                headers={"content-type": "application/json"},
-                base_entry={
-                    "request_id": "runaway-itest",
-                    "method": "POST",
-                    "path": "/v1/chat/completions",
-                },
-            )
-            records = [
-                json.loads(line) for line in open("/tmp/runaway_integration.jsonl") if line.strip()
-            ]
-            return resp, records
 
-        return asyncio.run(run())
-    finally:
-        mock.stop()
+            async def run():
+                resp = await proxy._forward_streaming(
+                    request_id="runaway-itest",
+                    method="POST",
+                    url="/v1/chat/completions",
+                    query="",
+                    body=body,
+                    headers={"content-type": "application/json"},
+                    base_entry={
+                        "request_id": "runaway-itest",
+                        "method": "POST",
+                        "path": "/v1/chat/completions",
+                    },
+                )
+                records = [
+                    json.loads(line)
+                    for line in open("/tmp/runaway_integration.jsonl")
+                    if line.strip()
+                ]
+                return resp, records
+
+            resp, records = asyncio.run(run())
+            return resp, records, mock.request_count
 
 
 def test_runaway_turn_is_nudged_and_returns_answer():
-    resp, records = _run_forward([_RUNAWAY_TURN, _ANSWER_TURN])
+    resp, records, count = _run_forward([_RUNAWAY_TURN, _ANSWER_TURN])
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     assert "The answer is 42." in data["choices"][0]["message"]["content"]
-    assert _MockHandler.requests == 2, _MockHandler.requests
+    assert count == 2, count
     triggered = [r for r in records if r.get("runaway", {}).get("outcome") == "triggered"]
     assert len(triggered) == 1, records
     # The re-submission carried the nudge instruction.
@@ -204,28 +163,30 @@ def test_runaway_turn_is_nudged_and_returns_answer():
 
 
 def test_runaway_budget_exhausted_aborts():
-    resp, records = _run_forward([_RUNAWAY_TURN, _RUNAWAY_TURN, _RUNAWAY_TURN], max_attempts=2)
+    resp, records, count = _run_forward(
+        [_RUNAWAY_TURN, _RUNAWAY_TURN, _RUNAWAY_TURN], max_attempts=2
+    )
     assert resp.status_code == 502, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     assert data["error"]["type"] == "runaway_reasoning_detected", data
-    assert _MockHandler.requests == 3, _MockHandler.requests
+    assert count == 3, count
 
 
 def test_content_producing_turn_never_flagged():
-    resp, records = _run_forward([_ANSWER_TURN])
+    resp, records, count = _run_forward([_ANSWER_TURN])
     assert resp.status_code == 200, (resp.status_code, resp.body)
-    assert _MockHandler.requests == 1, _MockHandler.requests
+    assert count == 1, count
     assert not any(r.get("runaway") for r in records), records
 
 
 def test_disabled_terminal_turn_is_plain_loop():
     # With the runaway feature off, a reasoning-only length turn falls back to
     # the generic loop verdict (and, with loop-retry also off, aborts as loop).
-    resp, records = _run_forward([_RUNAWAY_TURN], enabled=False, loop_retry=False)
+    resp, records, count = _run_forward([_RUNAWAY_TURN], enabled=False, loop_retry=False)
     assert resp.status_code == 502, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     assert data["error"]["type"] == "loop_detected", data
-    assert _MockHandler.requests == 1, _MockHandler.requests
+    assert count == 1, count
     assert not any(r.get("runaway") for r in records), records
 
 

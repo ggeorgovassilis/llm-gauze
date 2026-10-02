@@ -12,14 +12,12 @@ body and the recorder captured the intervention — plus a disabled-switch no-op
 
 import asyncio
 import json
-import threading
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from app.config import settings
 from app.proxy import Proxy
 from app.recorder import Recorder
 from app.remediation.overflow import MessageOverflowGuard
+from mock_upstream import MockUpstream, make_request, settings_override
 
 _WARNING = "PLEASE_WORK_AROUND_THIS"
 
@@ -134,102 +132,48 @@ def test_multiple_tool_messages_flag_only_oversized():
 # --- integration harness ---------------------------------------------
 
 
-class _CaptureHandler(BaseHTTPRequestHandler):
-    respond_sse = False
-    captured_body = None
-    requests = 0
-
-    def do_POST(self):
-        type(self).requests += 1
-        length = int(self.headers.get("Content-Length", 0))
-        type(self).captured_body = self.rfile.read(length)
-        if type(self).respond_sse:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.end_headers()
-            for chunk in [
-                _chunk({"role": "assistant", "content": "ok"}),
-                _chunk({}, finish_reason="stop"),
-            ]:
-                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-            self.wfile.write(b"data: [DONE]\n\n")
-        else:
-            payload = json.dumps(
-                {
-                    "id": "x",
-                    "object": "chat.completion",
-                    "created": 1,
-                    "model": "test",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": "ok"},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                }
-            ).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-    def log_message(self, *args):  # silence request logging
-        pass
-
-
-class _MockServer:
-    def __init__(self, respond_sse=False):
-        self.server = HTTPServer(("127.0.0.1", 0), _CaptureHandler)
-        _CaptureHandler.respond_sse = respond_sse
-        _CaptureHandler.captured_body = None
-        _CaptureHandler.requests = 0
-        self.port = self.server.server_address[1]
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-
-    def stop(self):
-        self.server.shutdown()
-
-
-async def _make_request(body: bytes):
-    from starlette.requests import Request
-
-    scope = {
-        "type": "http",
-        "asgi": {"version": "3.0"},
-        "http_version": "1.1",
-        "method": "POST",
-        "scheme": "http",
-        "path": "/v1/chat/completions",
-        "raw_path": b"/v1/chat/completions",
-        "query_string": b"",
-        "headers": [
-            (b"content-type", b"application/json"),
-            (b"host", b"127.0.0.1"),
+_OK_BODY = json.dumps(
+    {
+        "id": "x",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "test",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
         ],
-        "client": ("127.0.0.1", 12345),
-        "server": ("127.0.0.1", 8000),
     }
+).encode()
 
-    async def receive():
-        return {"type": "http.request", "body": body, "more_body": False}
 
-    return Request(scope, receive)
+def _overflow_mock(loop_enabled):
+    if loop_enabled:
+        specs = [
+            {
+                "chunks": [
+                    _chunk({"role": "assistant", "content": "ok"}),
+                    _chunk({}, finish_reason="stop"),
+                ]
+            }
+        ]
+    else:
+        specs = [{"status": 200, "content_type": "application/json", "body": _OK_BODY}]
+    return MockUpstream(specs)
 
 
 def _run_forward(loop_enabled, content, enabled=True):
-    mock = _MockServer(respond_sse=loop_enabled)
-    try:
-
-        async def run():
-            settings.llm_base_url = f"http://127.0.0.1:{mock.port}"
-            settings.loop_detection_enabled = loop_enabled
-            settings.message_overflow_enabled = enabled
-            settings.message_overflow_threshold = 10
-            settings.message_overflow_truncate = True
-            settings.message_overflow_warning = _WARNING
+    with _overflow_mock(loop_enabled) as mock:
+        with settings_override(
+            llm_base_url=mock.url,
+            loop_detection_enabled=loop_enabled,
+            message_overflow_enabled=enabled,
+            message_overflow_threshold=10,
+            message_overflow_truncate=True,
+            message_overflow_warning=_WARNING,
+        ):
             recorder = Recorder("/tmp/overflow_integration.jsonl")
             proxy = Proxy(recorder)
             body = json.dumps(
@@ -245,17 +189,17 @@ def _run_forward(loop_enabled, content, enabled=True):
                     ],
                 }
             ).encode()
-            request = await _make_request(body)
-            return await proxy.forward(request, "v1/chat/completions")
 
-        resp = asyncio.run(run())
-        records = [
-            json.loads(line) for line in open("/tmp/overflow_integration.jsonl") if line.strip()
-        ]
-        captured = json.loads(_CaptureHandler.captured_body)
-        return resp, records, captured
-    finally:
-        mock.stop()
+            async def run():
+                request = await make_request(body)
+                return await proxy.forward(request, "v1/chat/completions")
+
+            resp = asyncio.run(run())
+            records = [
+                json.loads(line) for line in open("/tmp/overflow_integration.jsonl") if line.strip()
+            ]
+            captured = mock.json_bodies()[0]
+            return resp, records, captured
 
 
 def test_buffered_forward_truncates_before_upstream():

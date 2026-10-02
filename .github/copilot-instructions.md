@@ -26,6 +26,15 @@ This project is an LLM gateway that detects and remediates shortcommings of loca
 - `tests/` - Tests
 - `scripts/` - Wrapper scripts
 
+# Testing
+- Tests run inside Docker — the same environment CI uses. Run them with `./scripts/test.sh` (which builds the `test` target of `docker-compose.dev.yml` and runs `pytest`).
+- The test runner is `pytest` (pinned in `requirements-dev.txt`); config lives in `pyproject.toml` (`testpaths = ["tests"]`, `pythonpath = ["source"]`).
+- Add or change tests as part of the ticket that changes the behaviour they cover — never leave a behaviour change without test coverage.
+- New tests go in `tests/` as `test_*.py` files with module-level `test_*` functions so `pytest` collects them; do not add per-file `__main__` runners to new tests.
+- Run `./scripts/test.sh` before committing and make sure the suite is green.
+- Tests use an in-process mock OpenAI-compatible upstream (`http.server` in the `*_integration.py` files) — do not depend on a real LLM; a real model is non-deterministic and cannot reproduce a stall/loop/overflow on demand.
+- When a test fails, investigate the failure; do not weaken or delete a test just to make it pass unless the test itself is wrong.
+
 # Implementing features
 - Always work with a github ticket
 - Create a branch for each tickcet, work in there

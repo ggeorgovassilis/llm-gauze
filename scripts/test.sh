@@ -4,5 +4,5 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-docker compose build test
-docker compose run --rm test pytest "$@"
+docker compose -f docker-compose.dev.yml build test
+docker compose -f docker-compose.dev.yml run --rm test pytest "$@"

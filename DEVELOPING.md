@@ -51,6 +51,23 @@ Tests use an in-process mock OpenAI-compatible upstream (`http.server` in the
 `*_integration.py` files) — never a real LLM, which is non-deterministic and
 cannot reproduce a stall/loop/overflow on demand.
 
+## Regenerating the dependency lockfiles
+
+Python dependencies are pinned twice: the direct pins in `source/requirements.txt`
+and `requirements-dev.txt`, and the transitive/hashed lockfiles `requirements.lock`
+(runtime) and `requirements-dev.lock` (test). The Dockerfile installs from the
+lockfiles with `--require-hashes`.
+
+When you change a direct dependency, regenerate the lockfiles with `pip-compile`
+(`pip-tools`), matching Python 3.12:
+
+```bash
+pip-compile --generate-hashes --strip-extras --output-file requirements.lock source/requirements.txt
+pip-compile --generate-hashes --strip-extras --output-file requirements-dev.lock source/requirements.txt requirements-dev.txt
+```
+
+Commit both lockfiles with the change.
+
 ## Adding a detector or remediation
 
 Detection and remediation are separate, pluggable concerns — see

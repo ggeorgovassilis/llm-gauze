@@ -50,6 +50,10 @@ def test_defaults_are_valid():
         ("message_overflow_threshold", 0),
         ("llm_base_url", ""),
         ("record_file", ""),
+        ("log_format", ""),
+        ("log_level", ""),
+        ("log_level", "VERBOSE"),
+        ("log_level", "trace"),
         ("think_tags", ""),
     ],
 )
@@ -75,6 +79,11 @@ def test_retryable_status_codes_reject_bad_values(bad_statuses):
 def test_retryable_status_codes_normalises_whitespace():
     result = Settings.model_validate({"retryable_status_codes": " 500 , 503 "})
     assert result.retryable_status_codes == "500,503"
+
+
+def test_log_level_normalises_case():
+    result = Settings.model_validate({"log_level": "debug"})
+    assert result.log_level == "DEBUG"
 
 
 def test_env_example_is_up_to_date():

@@ -74,3 +74,24 @@ def test_concurrent_records_preserve_call_order():
 
         seqs = [json.loads(line)["seq"] for line in path.read_text().splitlines()]
         assert seqs == list(range(100))
+
+
+def test_recording_disabled_writes_nothing():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "records.jsonl"
+        recorder = Recorder(path, enabled=False)
+        asyncio.run(recorder.record({"method": "POST", "path": "/x"}))
+        # No record file, no directory, no rotation — a disabled recorder must
+        # not touch the filesystem at all.
+        assert list(Path(tmp).iterdir()) == []
+
+
+def test_recording_disabled_does_not_rotate_existing():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "records.jsonl"
+        path.write_text('{"run": "one"}\n', encoding="utf-8")
+        recorder = Recorder(path, enabled=False)
+        asyncio.run(recorder.record({"run": "two"}))
+        # The pre-existing file is left untouched: no rotation, no append.
+        assert sorted(p.name for p in Path(tmp).iterdir()) == ["records.jsonl"]
+        assert path.read_text(encoding="utf-8") == '{"run": "one"}\n'

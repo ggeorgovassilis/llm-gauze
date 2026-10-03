@@ -11,6 +11,7 @@ synthesised branch of `_context_window_error_response`.
 
 import asyncio
 import json
+import logging
 
 import httpx
 from app.config import settings
@@ -360,3 +361,24 @@ def test_forward_http_error_passthrough():
     resp = _run_forward(handler)
     assert resp.status_code == 404, (resp.status_code, resp.body)
     assert json.loads(resp.body) == {"error": "not found"}
+
+
+def test_forward_logs_completion_summary(caplog):
+    async def handler(request):
+        return _http(200, body=b'{"ok": true}')
+
+    with caplog.at_level(logging.INFO, logger="llm_gauze.proxy"):
+        resp = _run_forward(handler)
+    assert resp.status_code == 200
+
+    summaries = [
+        r
+        for r in caplog.records
+        if r.name == "llm_gauze.proxy" and "outcome=success" in r.getMessage()
+    ]
+    assert summaries, [r.getMessage() for r in caplog.records]
+    msg = summaries[0].getMessage()
+    assert "POST /v1/completions" in msg
+    assert "status=200" in msg
+    assert "duration=" in msg
+    assert "outcome=success" in msg

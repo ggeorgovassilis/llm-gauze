@@ -91,6 +91,8 @@ class _StreamResult:
     attempt: int = 1
     max_attempts: int = 1
     duration: float = 0.0
+    # Terminal outcome label (stable vocabulary), set when ``response`` is set.
+    outcome: str | None = None
 
 
 def _decode(data: bytes) -> str | None:
@@ -450,6 +452,19 @@ class Proxy:
         """
         await self.client.aclose()
 
+    def _log_completion(
+        self, method: str, path: str, status: int, outcome: str, duration: float
+    ) -> None:
+        """Log the one-line per-request completion summary (INFO)."""
+        logger.info(
+            "%s %s status=%s duration=%.3fs outcome=%s",
+            method,
+            path,
+            status,
+            duration,
+            outcome,
+        )
+
     def _emit_attempt_telemetry(
         self,
         status: int | None,
@@ -491,22 +506,36 @@ class Proxy:
         if policy.should_retry(diagnosis, attempt):
             delay = policy.backoff.delay(attempt)
             telemetry.incr("retries_total")
-            logger.warning(
-                "retrying in %.2fs (attempt %d/%d)",
-                delay,
+            logger.info(
+                "retrying upstream request (attempt %d/%d)",
                 attempt + 1,
                 max_attempts,
+            )
+            logger.debug(
+                "backoff delay %.3fs before attempt %d (%s)",
+                delay,
+                attempt + 1,
+                diagnosis,
             )
             await asyncio.sleep(delay)
             return "retry"
         return None
 
     async def forward(self, request: Request, path: str) -> Response:
+        started = time.time()
         method = request.method
         body = await request.body()
         url = f"/{path}" if path else "/"
         query = request.url.query
         request_id = uuid.uuid4().hex
+
+        logger.debug(
+            "incoming request method=%s path=%s headers=%r body=%r",
+            method,
+            url,
+            dict(request.headers),
+            _decode(body),
+        )
 
         # Request-side guard: trim oversized tool results before forwarding, so
         # a single runaway ``role: "tool"`` message cannot silently eat the
@@ -515,6 +544,11 @@ class Proxy:
         overflow_changes: list = []
         if _is_chat_completion(url):
             overflow_changes, body = _apply_overflow_guard(body)
+            if overflow_changes:
+                logger.warning(
+                    "message overflow trimmed %d oversized tool result(s)",
+                    len(overflow_changes),
+                )
 
         base_entry = {
             "request_id": request_id,
@@ -541,7 +575,7 @@ class Proxy:
         # feature regardless of its own switch.
         if _streaming_feature_enabled() and _is_chat_completion(url):
             return await self._forward_streaming(
-                request_id, method, url, query, body, headers, base_entry
+                request_id, method, url, query, body, headers, base_entry, started
             )
 
         policy = self.retry_policy
@@ -610,13 +644,23 @@ class Proxy:
             if decision == "retry":
                 continue
             if decision == "context_window":
-                return _context_window_error_response(status, resp_body, resp_headers, diagnosis)
+                resp = _context_window_error_response(status, resp_body, resp_headers, diagnosis)
+                self._log_completion(
+                    method, url, resp.status_code, "context_window_exceeded", time.time() - started
+                )
+                return resp
 
             if status is None:
                 final_status = 502
                 final_headers = {"content-type": "application/json"}
                 final_body = b'{"error": "upstream failure"}'
                 outcome = "upstream_failure"
+                logger.error(
+                    "terminal upstream failure for %s %s after %d attempt(s)",
+                    method,
+                    url,
+                    attempt,
+                )
             else:
                 final_status = status
                 final_headers = resp_headers
@@ -632,12 +676,20 @@ class Proxy:
             if k.lower() not in HOP_BY_HOP_HEADERS and k.lower() not in _OWNED_RESPONSE_HEADERS
         }
 
-        return Response(
+        resp = Response(
             content=final_body,
             status_code=final_status,
             headers=out_headers,
             media_type=content_type,
         )
+        self._log_completion(method, url, final_status, outcome, time.time() - started)
+        logger.debug(
+            "response status=%s headers=%r body=%r",
+            final_status,
+            dict(final_headers),
+            _decode(final_body),
+        )
+        return resp
 
     async def _forward_streaming(
         self,
@@ -648,6 +700,7 @@ class Proxy:
         body: bytes,
         headers: dict,
         base_entry: dict,
+        started: float | None = None,
     ) -> Response:
         """Stream the upstream response; drive the remediation ladder.
 
@@ -667,6 +720,8 @@ class Proxy:
         # re-serialised), so any inbound Content-Length is stale. Drop it and
         # let httpx recompute it from the actual body; forwarding the stale
         # value makes h11 raise "Too much data for declared Content-Length".
+        if started is None:
+            started = time.time()
         out_headers = {k: v for k, v in headers.items() if k.lower() != "content-length"}
         content_type = _ensure_stream(body)[1]
         if content_type:
@@ -704,6 +759,12 @@ class Proxy:
 
             step = _first_applicable_step(ladder, attempts, turn, request_payload)
             if step is not None:
+                logger.warning(
+                    "remediation triggered: %s (attempt %d/%d)",
+                    step.name,
+                    attempts[step.name] + 1,
+                    step.max_attempts,
+                )
                 resubmitted = step.apply(turn, request_payload)
                 await self._record_remediation_pass(
                     step,
@@ -720,7 +781,21 @@ class Proxy:
             # No rung fired: the outcome is final. A verdict (loop/stall/
             # runaway) aborts; a clean turn is finalised (nudge/coast floors).
             if result.response is not None:
-                return result.response
+                resp = result.response
+                self._log_completion(
+                    method,
+                    url,
+                    resp.status_code,
+                    result.outcome or "unknown",
+                    time.time() - started,
+                )
+                logger.debug(
+                    "response status=%s headers=%r body=%r",
+                    resp.status_code,
+                    dict(resp.headers),
+                    resp.body,
+                )
+                return resp
 
             nudge_outcome = _remediation_outcome(
                 _find_step(ladder, "nudge"), attempts, turn, request_payload
@@ -728,7 +803,7 @@ class Proxy:
             coast_outcome = _remediation_outcome(
                 _find_step(ladder, "coast"), attempts, turn, request_payload
             )
-            return await self._finalize_success(
+            resp = await self._finalize_success(
                 base_entry,
                 result,
                 guard,
@@ -738,6 +813,14 @@ class Proxy:
                 attempts.get("coast", 0),
                 coast_outcome,
             )
+            self._log_completion(method, url, resp.status_code, "success", time.time() - started)
+            logger.debug(
+                "response status=%s headers=%r body=%r",
+                resp.status_code,
+                dict(resp.headers),
+                resp.body,
+            )
+            return resp
 
     def _build_remediation_ladder(self) -> list[Remediation]:
         """Assemble the ordered, composable remediation ladder from settings.
@@ -883,6 +966,7 @@ class Proxy:
                     response=_abort_error_response(loop_verdict),
                     loop_verdict=loop_verdict,
                     loop_stream=loop_stream,
+                    outcome=route.outcome,
                 )
 
             # Transport error -> retry or give up (mirrors the buffered path).
@@ -909,17 +993,25 @@ class Proxy:
                     continue
                 if decision == "context_window":
                     return _StreamResult(
+                        outcome="context_window_exceeded",
                         response=_context_window_error_response(
                             status, error_body, resp_headers, diagnosis
-                        )
+                        ),
                     )
                 telemetry.incr("requests_total", {"outcome": "upstream_failure"})
+                logger.error(
+                    "terminal upstream failure for %s %s after %d attempt(s)",
+                    method,
+                    url,
+                    attempt,
+                )
                 return _StreamResult(
+                    outcome="upstream_failure",
                     response=Response(
                         content=b'{"error": "upstream failure"}',
                         status_code=502,
                         media_type="application/json",
-                    )
+                    ),
                 )
 
             # HTTP error status -> retry or return it.
@@ -943,19 +1035,21 @@ class Proxy:
                     continue
                 if decision == "context_window":
                     return _StreamResult(
+                        outcome="context_window_exceeded",
                         response=_context_window_error_response(
                             status, error_body, resp_headers, diagnosis
-                        )
+                        ),
                     )
                 telemetry.incr("requests_total", {"outcome": "http_error"})
                 err_headers, ctype = _filtered_headers(resp_headers)
                 return _StreamResult(
+                    outcome="http_error",
                     response=Response(
                         content=error_body,
                         status_code=status,
                         headers=err_headers,
                         media_type=ctype,
-                    )
+                    ),
                 )
 
             # Success: relocate leaked think tags (the caller decides whether
@@ -964,6 +1058,11 @@ class Proxy:
             if settings.think_cleanup_enabled:
                 guard = ThinkContentGuard.from_settings()
                 content, reasoning, relocate_changes = guard.relocate(content, reasoning)
+                if relocate_changes:
+                    logger.warning(
+                        "think-cleanup relocated %d leaked thinking tag(s)",
+                        len(relocate_changes),
+                    )
 
             return _StreamResult(
                 content=content,
@@ -982,11 +1081,12 @@ class Proxy:
 
         # Exhausted retries (all attempts errored) — defensive fallback.
         return _StreamResult(
+            outcome="upstream_failure",
             response=Response(
                 content=b'{"error": "upstream failure"}',
                 status_code=502,
                 media_type="application/json",
-            )
+            ),
         )
 
     async def _record_nudge_pass(
@@ -1133,10 +1233,14 @@ class Proxy:
         if guard is not None:
             content, guard_changes = guard.guard_empty(content, reasoning, result.tool_calls)
             cleanup_changes.extend(guard_changes)
+            if guard_changes:
+                logger.warning("think-cleanup applied placeholder to empty visible turn")
 
         tool_changes: list = []
         if settings.tool_call_guard_enabled and result.tool_calls:
             tool_changes = ToolCallGuard.from_settings().validate(result.tool_calls)
+            if tool_changes:
+                logger.warning("tool-call repair changed %d tool call(s)", len(tool_changes))
 
         final_body = json.dumps(
             _reconstruct_chat_completion(result.meta, content, reasoning, result.tool_calls)

@@ -81,6 +81,42 @@ class Settings(BaseSettings):
         min_length=1,
     )
 
+    # --- Logging & recording -----------------------------------------
+    # Verbosity of the gateway's log stream. One of the standard Python
+    # levels; DEBUG for troubleshooting, WARNING/ERROR for quiet production.
+    log_level: str = _field(
+        "INFO",
+        "Log verbosity: DEBUG, INFO, WARNING, ERROR, or CRITICAL.",
+        "Logging & recording",
+    )
+
+    # Format string applied to every log line (Python logging format syntax).
+    log_format: str = _field(
+        "%(asctime)s %(name)s %(levelname)s %(message)s",
+        "Format string for log lines (Python logging format syntax).",
+        "Logging & recording",
+        min_length=1,
+    )
+
+    # Master switch for JSONL exchange recording. When false the recorder is
+    # still constructed but writes nothing (and touches no files).
+    recording_enabled: bool = _field(
+        True,
+        "Master switch for JSONL exchange recording.",
+        "Logging & recording",
+    )
+
+    @field_validator("log_level")
+    @classmethod
+    def _validate_log_level(cls, value: str) -> str:
+        allowed = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        level = str(value).strip().upper()
+        if level not in allowed:
+            raise ValueError(
+                f"invalid log level {value!r}; expected one of {', '.join(sorted(allowed))}"
+            )
+        return level
+
     # --- Retries / backoff --------------------------------------------
     # Maximum number of attempts per upstream request (1 = no retry).
     retry_max_attempts: int = _field(

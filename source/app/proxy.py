@@ -107,6 +107,31 @@ def _is_chat_completion(path: str) -> bool:
     return path.rstrip("/").endswith("/chat/completions")
 
 
+def _streaming_feature_enabled() -> bool:
+    """Whether any streaming-path feature is enabled.
+
+    The streaming path hosts loop detection plus stall detection,
+    runaway-reasoning detection, nudge, coast, think-cleanup, and the
+    tool-call guard. Each has its own switch, and the path must be entered
+    whenever any one of them is on — not only when loop detection is on.
+
+    ``loop_retry_enabled`` is deliberately absent: loop-retry only ever fires
+    on a loop verdict, which requires loop detection, so it never needs to
+    trigger the streaming path on its own.
+    """
+    return any(
+        (
+            settings.loop_detection_enabled,
+            settings.stall_detection_enabled,
+            settings.runaway_reasoning_enabled,
+            settings.think_nudge_enabled,
+            settings.coast_detection_enabled,
+            settings.think_cleanup_enabled,
+            settings.tool_call_guard_enabled,
+        )
+    )
+
+
 def _ensure_stream(body: bytes) -> tuple[bytes, str]:
     """Rewrite a JSON request body to force ``stream: true`` upstream."""
     if not body:
@@ -436,9 +461,13 @@ class Proxy:
             # path's comment on the same h11 failure mode).
             headers = {k: v for k, v in headers.items() if k.lower() != "content-length"}
 
-        # Chat completions get the streaming loop-detection path; everything
-        # else goes through the buffered forwarder unchanged.
-        if settings.loop_detection_enabled and _is_chat_completion(url):
+        # Chat completions get the streaming path whenever any streaming
+        # feature is enabled; everything else goes through the buffered
+        # forwarder unchanged. Entering the streaming path must not depend on
+        # loop detection alone, otherwise disabling loop detection to silence
+        # one false positive would silently disable every other streaming
+        # feature regardless of its own switch.
+        if _streaming_feature_enabled() and _is_chat_completion(url):
             return await self._forward_streaming(
                 request_id, method, url, query, body, headers, base_entry
             )

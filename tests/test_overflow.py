@@ -129,6 +129,36 @@ def test_multiple_tool_messages_flag_only_oversized():
     assert out["messages"][2]["content"].startswith(_WARNING)
 
 
+def test_non_dict_body_untouched():
+    guard = MessageOverflowGuard(threshold=10, truncate=True, warning=_WARNING)
+    out, changes = guard.process("not a dict")
+    assert changes == [], changes
+    assert out == "not a dict"
+
+
+def test_non_list_messages_untouched():
+    guard = MessageOverflowGuard(threshold=10, truncate=True, warning=_WARNING)
+    body = {"model": "test", "messages": "not a list"}
+    out, changes = guard.process(body)
+    assert changes == [], changes
+    assert out is body
+
+
+def test_non_dict_message_skipped():
+    guard = MessageOverflowGuard(threshold=10, truncate=True, warning=_WARNING)
+    body = {
+        "model": "test",
+        "messages": [
+            "not a dict",
+            {"role": "tool", "tool_call_id": "c1", "content": "b" * 100},
+        ],
+    }
+    out, changes = guard.process(body)
+    assert [c["index"] for c in changes] == [1], changes
+    assert out["messages"][0] == "not a dict"
+    assert out["messages"][1]["content"].startswith(_WARNING)
+
+
 # --- integration harness ---------------------------------------------
 
 

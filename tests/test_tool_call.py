@@ -117,6 +117,52 @@ def test_repairs_second_call_and_flags_first():
     assert json.loads(calls[1]["function"]["arguments"]) == {"b": 2}
 
 
+def test_escaped_quote_repaired():
+    calls = [_call('{"msg": "he said \\"hi')]
+    changes = _guard().validate(calls)
+    assert changes == [{"kind": "repaired_arguments", "index": 0}], changes
+    assert json.loads(calls[0]["function"]["arguments"]) == {"msg": 'he said "hi'}, calls
+
+
+def test_dangling_escape_flagged():
+    calls = [_call('{"a": "foo\\')]
+    changes = _guard().validate(calls)
+    assert changes == [
+        {"kind": "flagged_malformed", "index": 0, "reason": "unfixable_arguments"}
+    ], changes
+
+
+def test_nested_array_truncation_repaired():
+    calls = [_call("[[1,2]")]
+    changes = _guard().validate(calls)
+    assert changes == [{"kind": "repaired_arguments", "index": 0}], changes
+    assert json.loads(calls[0]["function"]["arguments"]) == [[1, 2]], calls
+
+
+def test_mismatched_closing_bracket_flagged():
+    calls = [_call('{"a": 1]')]
+    changes = _guard().validate(calls)
+    assert changes == [
+        {"kind": "flagged_malformed", "index": 0, "reason": "unfixable_arguments"}
+    ], changes
+
+
+def test_non_object_call_flagged():
+    changes = _guard().validate(["not a dict"])
+    assert changes == [{"kind": "flagged_malformed", "index": 0, "reason": "not_an_object"}], (
+        changes
+    )
+
+
+def test_drop_trailing_comma_skips_whitespace():
+    from app.remediation.tool_call import _drop_trailing_comma
+
+    out = list('{"a": 1,  ')
+    _drop_trailing_comma(out)
+    # The comma is dropped after skipping the whitespace that followed it.
+    assert "".join(out) == '{"a": 1' + "  "
+
+
 # --- integration harness ---------------------------------------------
 
 

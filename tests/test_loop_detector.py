@@ -200,6 +200,15 @@ def test_compression_ratio_orders_repetition():
     assert detector._compression_ratio(repetitive) < detector._compression_ratio(novel)
 
 
+def test_feed_empty_string_is_noop():
+    detector = _make()
+    assert detector.feed("") is None
+
+
+def test_compression_ratio_of_empty_text_is_one():
+    assert _make()._compression_ratio("") == 1.0
+
+
 def _run_all() -> int:
     tests = [
         value

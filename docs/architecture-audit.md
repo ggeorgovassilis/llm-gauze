@@ -251,7 +251,7 @@ module under `source/app/` (including `source/app/remediation/`), and skimmed
 
 **What is not good**
 
-- **`proxy.py` knows every module by name.** It imports from all eleven
+- **`proxy.py` knows every module by name.** It imports from all twelve
   remediation modules and instantiates their classes inline. The architecture
   promise that "future
   capabilities implement these interfaces rather than editing the proxy" is

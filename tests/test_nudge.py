@@ -17,6 +17,7 @@ import traceback
 
 from app.proxy import Proxy
 from app.recorder import Recorder
+from app.remediation.base import Turn
 from app.remediation.nudge import NudgePolicy
 from mock_upstream import MockUpstream, chunk, settings_override
 
@@ -66,7 +67,7 @@ def test_should_nudge_requires_reasoning():
 
 def test_apply_appends_nudge_message():
     body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
-    out = NudgePolicy(text=_NUDGE).apply(body)
+    out = NudgePolicy(text=_NUDGE).apply(Turn(), body)
     assert len(out["messages"]) == 2, out
     assert out["messages"][-1] == {"role": "user", "content": _NUDGE}, out
     assert out["messages"][0] == {"role": "user", "content": "hi"}, out
@@ -74,7 +75,7 @@ def test_apply_appends_nudge_message():
 
 def test_apply_does_not_mutate_input():
     body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
-    NudgePolicy(text=_NUDGE).apply(body)
+    NudgePolicy(text=_NUDGE).apply(Turn(), body)
     assert len(body["messages"]) == 1, body
 
 

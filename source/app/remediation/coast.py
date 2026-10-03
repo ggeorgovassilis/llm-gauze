@@ -30,6 +30,7 @@ without the gateway.
 """
 
 from app.config import settings
+from app.remediation.base import Remediation, Turn
 
 
 def _has_prior_assistant_tool_call(messages: list | None) -> bool:
@@ -45,7 +46,7 @@ def _has_prior_assistant_tool_call(messages: list | None) -> bool:
     return False
 
 
-class CoastPolicy:
+class CoastPolicy(Remediation):
     """Decide whether a coasted turn is worth re-prompting and build the
     re-submission.
 
@@ -54,6 +55,8 @@ class CoastPolicy:
     message and the re-prompt to a copy of the request body without mutating
     the input (pure, unit-testable without the gateway).
     """
+
+    name = "coast"
 
     def __init__(
         self,
@@ -99,7 +102,18 @@ class CoastPolicy:
             and (reasoning or "").strip() == visible
         )
 
-    def apply(self, request_body: dict, content: str) -> dict:
+    def applies(self, turn: Turn, request_body: dict) -> bool:
+        """The ladder's trigger: a coasted turn (see :meth:`should_nudge`)."""
+        return self.should_nudge(
+            turn.finish_reason,
+            turn.content,
+            turn.tool_calls,
+            turn.reasoning,
+            request_body.get("tools"),
+            request_body.get("messages"),
+        )
+
+    def apply(self, turn: Turn, request_body: dict) -> dict:
         """Return a copy of the request body with the coasted turn replayed and
         the re-prompt appended.
 
@@ -109,7 +123,7 @@ class CoastPolicy:
         """
         body = dict(request_body)
         messages = list(body.get("messages") or [])
-        messages.append({"role": "assistant", "content": content})
+        messages.append({"role": "assistant", "content": turn.content})
         messages.append({"role": "user", "content": self.text})
         body["messages"] = messages
         return body

@@ -40,14 +40,42 @@ capabilities can be added without rearchitecting:
 2. **Understanding** — `Detector` classes classify a failure into a
    `Diagnosis` (retryable or not, and why).
 3. **Action** — `Backoff`/`RetryPolicy` classes turn a `Diagnosis` into
-   behaviour (e.g. retry with exponential backoff).
+   behaviour (e.g. retry with exponential backoff), and `Remediation` steps
+   re-submit a streamed turn that failed; `Transform` classes rewrite content
+   or a request body in place.
 
 ```
 failure ──▶ Detector (understanding) ──▶ Diagnosis ──▶ Backoff/RetryPolicy (action)
 ```
 
 - `app/remediation/base.py` — abstract `Detector`, `Backoff`, `Diagnosis`,
-  `RetryPolicy`, plus `ContentWatchdog`/`StreamVerdict` for content streams.
+  `RetryPolicy`, plus `ContentWatchdog`/`StreamVerdict` for content streams,
+  and the `Turn` value object with the `Remediation`/`Transform` protocols
+  for the composable ladder.
+
+### Remediation ladder
+
+The remediation of a streamed turn is expressed as an **ordered, composable
+ladder** of `Remediation` steps rather than a hard-coded `if`-chain. Each step
+implements the one uniform protocol in `base.py`:
+
+- `applies(turn, request_body) -> bool` — the step's trigger, a pure predicate
+  over the assembled `Turn` (finish reason, content, reasoning, tool calls,
+  and any abort verdict) plus the request body it came from.
+- `apply(turn, request_body) -> dict` — returns a **copy** of the request body
+  prepared for re-submission; it never mutates the input.
+- `name` (a short id used for recording/telemetry) and `max_attempts` (the
+  step's own re-submission budget) are declared as class attributes.
+
+The ladder is assembled from enabled settings in `_build_remediation_ladder`
+as a plain ordered list — **runaway → loop_retry → nudge → coast** — and a
+disabled rung is simply left out. After each exchange the proxy walks the
+ladder in order and re-submits via the first rung whose `applies` fires; when
+no rung fires the outcome is final. A new remediation is therefore "implement
+and register" (append a `Remediation` subclass to the ladder), not "edit the
+loop". `Transform` classes (`ThinkContentGuard`, `ToolCallGuard`,
+`MessageOverflowGuard`) share a sibling protocol: a canonical `apply` that
+rewrites a value and reports its mutations, never re-submitting.
 - `app/remediation/retry.py` — `RetryableDetector` (transient exceptions +
   retryable HTTP statuses) and `ExponentialBackoff` (with optional jitter).
 - `app/remediation/loop.py` — `ThinkingLoopDetector`, a stateful
@@ -237,9 +265,10 @@ empty-response ladder (`nudge → extract → placeholder floor`).
 - `NudgePolicy.should_nudge(finish_reason, content, tool_calls, reasoning)` is a
   pure predicate over the *relocated* turn: stop + empty content + no tool
   calls + non-empty reasoning. Deterministic — no heuristics.
-- `NudgePolicy.apply(body)` appends `{"role": "user", "content": <nudge>}` to a
-  copy of the request (the nudge text is `THINK_NUDGE_TEXT`) without mutating
-  the input.
+- `NudgePolicy.apply(turn, body)` appends `{"role": "user", "content": <nudge>}`
+  to a copy of the request (the nudge text is `THINK_NUDGE_TEXT`) without
+  mutating the input. Its ladder trigger is `applies(turn, body)`, which
+  forwards the assembled turn to `should_nudge`.
 - The re-submitted request reuses the streaming path unchanged; the budget is
   `THINK_NUDGE_MAX_ATTEMPTS`, and each nudge pass is recorded with an
   `outcome` (`triggered`, `succeeded`, or `exhausted`) so the intervention is
@@ -272,10 +301,12 @@ deterministic "coasting" fingerprint observed in the incident.
   non-empty content + no tool calls + non-empty `tools` list + a prior
   assistant tool-call turn + reasoning byte-identical to content. Deterministic
   — no heuristics.
-- `CoastPolicy.apply(body, content)` replays the coasted assistant message into
-  the conversation and appends the re-prompt (`COAST_NUDGE_TEXT`). Unlike nudge
-  (whose empty turn left nothing in context), the coasted message is replayed
-  so the re-prompt refers to something the model actually said.
+- `CoastPolicy.apply(turn, body)` replays the coasted assistant message (from
+  `turn.content`) into the conversation and appends the re-prompt
+  (`COAST_NUDGE_TEXT`). Unlike nudge (whose empty turn left nothing in
+  context), the coasted message is replayed so the re-prompt refers to
+  something the model actually said. Its ladder trigger is
+  `applies(turn, body)`, forwarding to `should_nudge`.
 - The re-submitted request reuses the streaming path unchanged; the budget is
   `COAST_MAX_ATTEMPTS`, and each pass is recorded with an `outcome`
   (`triggered`, `succeeded`, or `exhausted`) so the intervention is visible in
@@ -310,10 +341,11 @@ tokens stay at zero**. Two windows observe it:
    with reasoning present but no content and no tool calls: the model burned
    its entire budget thinking.
 
-Remediation mirrors the nudge rung: `RunawayReasoningPolicy.apply(body)` appends
-a stop-thinking instruction (`RUNAWAY_REASONING_NUDGE_TEXT`) and re-submits,
-capped by `RUNAWAY_REASONING_MAX_ATTEMPTS`. On exhaustion the gateway returns
-`RUNAWAY_REASONING_ABORT_STATUS` (default 502).
+Remediation mirrors the nudge rung: `RunawayReasoningPolicy.apply(turn, body)`
+appends a stop-thinking instruction (`RUNAWAY_REASONING_NUDGE_TEXT`) and
+re-submits, capped by `RUNAWAY_REASONING_MAX_ATTEMPTS`. Its ladder trigger
+`applies(turn, body)` fires on a `runaway_reasoning` verdict. On exhaustion the
+gateway returns `RUNAWAY_REASONING_ABORT_STATUS` (default 502).
 
 The master switch is `RUNAWAY_REASONING_ENABLED`.
 

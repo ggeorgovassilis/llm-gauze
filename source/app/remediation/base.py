@@ -137,3 +137,64 @@ class ContentWatchdog(ABC):
     @abstractmethod
     def reset(self) -> None:
         """Clear all accumulated state so the watchdog can be reused."""
+
+
+@dataclass
+class Turn:
+    """The assembled result of one streamed turn, as the ladder sees it.
+
+    A single, uniform view of a completed turn that a :class:`Remediation`
+    step inspects: the finish reason, the visible content, the reasoning
+    stream, any tool calls, and (for abort-verdict steps) the content verdict
+    that aborted the stream.
+    """
+
+    finish_reason: str | None = None
+    content: str = ""
+    reasoning: str = ""
+    tool_calls: list = field(default_factory=list)
+    verdict: StreamVerdict | None = None
+
+
+class Remediation(ABC):
+    """Action layer: one rung of the composable remediation ladder.
+
+    A remediation step inspects a completed :class:`Turn` (plus the request it
+    came from) and, when its trigger fires, produces the re-submission request
+    body that gives the model another chance. Steps carry their own attempt
+    budget so the ladder drives every rung uniformly — a new remediation is
+    "implement and register", not "edit the loop".
+
+    Implementers set :attr:`name` (a short id used for recording/telemetry)
+    and :attr:`max_attempts`, and implement :meth:`applies` (the trigger) and
+    :meth:`apply` (the re-submission body).
+    """
+
+    #: Short id used to key this step's recorder entries and attempt counter.
+    name: str = "remediation"
+    #: How many re-submissions this step may make before the ladder gives up.
+    max_attempts: int = 1
+
+    @abstractmethod
+    def applies(self, turn: Turn, request_body: dict) -> bool:
+        """Whether this step triggers for the given turn and request."""
+
+    @abstractmethod
+    def apply(self, turn: Turn, request_body: dict) -> dict:
+        """Return a copy of ``request_body`` prepared for re-submission."""
+
+
+class Transform(ABC):
+    """A pure content/body transform that reports its mutations.
+
+    Transforms rewrite a value the pipeline hands them — an assembled
+    completion (think cleanup, tool-call repair) or a request body
+    (message-overflow trimming) — and report a list of ``{kind, …}`` change
+    records so no mutation is silent. Unlike :class:`Remediation`, a transform
+    never re-submits: it edits in place and the pipeline moves on.
+
+    Subclasses expose a canonical :meth:`apply` entry point (whose exact
+    signature depends on the value transformed) and may keep convenience
+    methods for finer steps (e.g. ``relocate`` / ``guard_empty``). This base
+    exists so every transform shares one type and one documented contract.
+    """

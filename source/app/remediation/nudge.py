@@ -16,10 +16,13 @@ floor and below #13 extraction — so it is deliberately tiny and deterministic:
 """
 
 from app.config import settings
+from app.remediation.base import Remediation, Turn
 
 
-class NudgePolicy:
+class NudgePolicy(Remediation):
     """Decide whether to nudge an empty turn and build the nudged request."""
+
+    name = "nudge"
 
     def __init__(
         self,
@@ -56,7 +59,11 @@ class NudgePolicy:
             and (reasoning or "").strip() != ""
         )
 
-    def apply(self, request_body: dict) -> dict:
+    def applies(self, turn: Turn, request_body: dict) -> bool:
+        """The ladder's trigger: an empty turn (see :meth:`should_nudge`)."""
+        return self.should_nudge(turn.finish_reason, turn.content, turn.tool_calls, turn.reasoning)
+
+    def apply(self, turn: Turn, request_body: dict) -> dict:
         """Return a copy of the request body with the nudge message appended."""
         body = dict(request_body)
         messages = list(body.get("messages") or [])

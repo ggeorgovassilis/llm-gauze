@@ -25,6 +25,8 @@ schema (see #13 for AI-assisted extraction).
 
 import json
 
+from app.remediation.base import Transform
+
 
 def _drop_trailing_comma(out: list[str]) -> None:
     """Drop a trailing comma (and surrounding whitespace) before a closer.
@@ -104,7 +106,7 @@ def _try_repair_arguments(text: str) -> str | None:
     return repaired
 
 
-class ToolCallGuard:
+class ToolCallGuard(Transform):
     """Validate assembled tool calls; repair deterministic breakage; flag rest.
 
     ``validate(tool_calls)`` mutates the call list in place (repairing
@@ -120,6 +122,14 @@ class ToolCallGuard:
     @classmethod
     def from_settings(cls) -> "ToolCallGuard":
         return cls()
+
+    def apply(self, tool_calls: list | None) -> tuple[list, list[dict]]:
+        """Canonical :class:`Transform` entry point: validate and report.
+
+        Returns ``(tool_calls, changes)`` — the (possibly repaired) list plus
+        the change records (see :meth:`validate`).
+        """
+        return tool_calls or [], self.validate(tool_calls)
 
     def validate(self, tool_calls: list | None) -> list[dict]:
         changes: list[dict] = []

@@ -34,3 +34,4 @@ htmlcov/
 .github/agents/reviewer.agent.md
 .github/agents/tester.agent.md
 .github/agents/po.agent.md
+agent-debug-log.json

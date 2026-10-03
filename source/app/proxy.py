@@ -585,7 +585,7 @@ class Proxy:
         outcome = "unknown"
 
         for attempt in range(1, policy.max_attempts + 1):
-            started = time.time()
+            attempt_started = time.time()
             status: int | None = None
             resp_headers: dict = {}
             resp_body: bytes = b""
@@ -618,7 +618,7 @@ class Proxy:
                     diagnosis,
                 )
 
-            self._emit_attempt_telemetry(status, error, time.time() - started)
+            self._emit_attempt_telemetry(status, error, time.time() - attempt_started)
 
             # Action: retry with backoff, or settle on the final outcome.
             decision = await self._retry_decision(diagnosis, attempt, policy.max_attempts)
@@ -637,7 +637,7 @@ class Proxy:
                     "response_body": _decode(resp_body) if decision != "retry" else None,
                     "error": error,
                     "diagnosis": _diagnosis_entry(diagnosis),
-                    "duration": time.time() - started,
+                    "duration": time.time() - attempt_started,
                 }
             )
 

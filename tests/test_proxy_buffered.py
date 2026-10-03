@@ -382,3 +382,37 @@ def test_forward_logs_completion_summary(caplog):
     assert "status=200" in msg
     assert "duration=" in msg
     assert "outcome=success" in msg
+
+
+def test_forward_completion_duration_spans_retries(caplog):
+    """The completion line's `duration` must cover the whole request.
+
+    It starts when the request arrives and ends when the final response is
+    produced, so it includes the failed first attempt, the backoff sleep, and
+    the successful retry — not just the last attempt.
+    """
+    calls = {"n": 0}
+
+    async def handler(request):
+        calls["n"] += 1
+        await asyncio.sleep(0.1)  # a slow, failing first attempt
+        if calls["n"] == 1:
+            return _http(500, body=b'{"error": "boom"}')
+        return _http(200, body=b'{"ok": true}')
+
+    with caplog.at_level(logging.INFO, logger="llm_gauze.proxy"):
+        resp = _run_forward(handler)
+    assert resp.status_code == 200
+    assert calls["n"] == 2
+
+    summaries = [
+        r
+        for r in caplog.records
+        if r.name == "llm_gauze.proxy" and "outcome=success" in r.getMessage()
+    ]
+    assert summaries, [r.getMessage() for r in caplog.records]
+    msg = summaries[0].getMessage()
+    duration = float(msg.split("duration=")[1].split(" ")[0].rstrip("s"))
+    # The logged duration is wall-clock and must at least cover the slow first
+    # attempt plus the retry backoff; a last-attempt-only duration would be ~0.
+    assert duration >= 0.15, msg

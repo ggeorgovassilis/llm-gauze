@@ -5,12 +5,6 @@ Thanks for your interest in contributing to llm-gauze. This guide covers the
 run the gateway, run the tests, and add a detector or remediation, see
 [`DEVELOPING.md`](DEVELOPING.md).
 
-## Code of conduct
-
-Be kind, be concise, and keep the discussion focused on the change. Assume good
-faith. Maintainers may close issues or pull requests that are off-topic, or ask
-you to split an oversized change into smaller pieces.
-
 ## Reporting issues
 
 - Search the [open issues](https://github.com/ggeorgovassilis/llm-gauze/issues)

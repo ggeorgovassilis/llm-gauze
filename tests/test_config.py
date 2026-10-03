@@ -19,8 +19,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_defaults_are_valid():
-    # Every shipped default must pass the model's own validation.
-    assert Settings.model_validate({})
+    # Every shipped default must pass the model's own validation. Validate the
+    # declared defaults explicitly so the check is isolated from any ambient
+    # `.env` file or environment variables and is therefore deterministic.
+    defaults = {name: info.default for name, info in Settings.model_fields.items()}
+    assert Settings.model_validate(defaults)
 
 
 @pytest.mark.parametrize(
@@ -82,9 +85,25 @@ def test_configuration_md_is_up_to_date():
     assert (REPO_ROOT / "docs" / "configuration.md").read_text() == configuration_md()
 
 
+def _env_keys(text: str) -> set[str]:
+    """Return the set of variable names declared in a rendered ``.env.example``."""
+    return {
+        line.split("=", 1)[0]
+        for line in text.splitlines()
+        if line and not line.startswith("#") and "=" in line
+    }
+
+
+def _md_tokens(text: str) -> set[str]:
+    """Return the set of backtick-quoted variable tokens in ``configuration.md``."""
+    return {line.split("|")[1].strip() for line in text.splitlines() if line.startswith("| `")}
+
+
 def test_every_setting_is_documented():
-    env = env_example()
-    md = configuration_md()
+    # Exact-token matching so an overlapping setting name cannot false-positive.
+    env_keys = _env_keys(env_example())
+    md_tokens = _md_tokens(configuration_md())
     for name in Settings.model_fields:
-        assert f"{name.upper()}=" in env, f"{name} missing from .env.example"
-        assert f"`{name.upper()}`" in md, f"{name} missing from docs/configuration.md"
+        var = name.upper()
+        assert var in env_keys, f"{name} missing from .env.example"
+        assert f"`{var}`" in md_tokens, f"{name} missing from docs/configuration.md"

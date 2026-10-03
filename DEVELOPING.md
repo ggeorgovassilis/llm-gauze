@@ -92,6 +92,6 @@ Detection and remediation are separate, pluggable concerns — see
   `section`, and validation constraints (ranges, enum-like status codes).
   [`docs/configuration.md`](docs/configuration.md) and `.env.example` are
   generated from it — run `python scripts/generate_config.py` to regenerate
-  them (or `--check` to verify they are up to date).
+  them. Drift is also caught by the config-drift tests in `tests/test_config.py`.
 - Add tests in `tests/` as `test_*.py` files with module-level `test_*`
   functions so `pytest` collects them. No per-file `__main__` runners.

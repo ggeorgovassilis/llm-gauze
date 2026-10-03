@@ -2,8 +2,8 @@
 """Regenerate ``.env.example`` and ``docs/configuration.md`` from ``config.py``.
 
 Run from the repository root (or anywhere — paths are resolved relative to this
-script). With ``--check`` it instead verifies the two files are up to date and
-exits non-zero if they are not, for use in CI.
+script). The two files are derived from ``source/app/config.py``; drift from it
+is also caught by the config-drift tests in ``tests/test_config.py``.
 """
 
 from __future__ import annotations
@@ -22,21 +22,11 @@ TARGETS = {
 }
 
 
-def main(argv: list[str]) -> int:
-    check = "--check" in argv
-    stale = False
+def main() -> None:
     for path, render in TARGETS.items():
-        content = render()
-        if path.exists() and path.read_text() == content:
-            continue
-        if check:
-            print(f"{path.relative_to(REPO_ROOT)} is out of date — re-run scripts/generate_config.py")
-            stale = True
-        else:
-            path.write_text(content)
-            print(f"wrote {path.relative_to(REPO_ROOT)}")
-    return 1 if stale else 0
+        path.write_text(render())
+        print(f"wrote {path.relative_to(REPO_ROOT)}")
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    main()

@@ -429,6 +429,54 @@ class Proxy:
         self.retry_policy = _build_retry_policy()
         self.pipeline = StreamingPipeline(self.client)
 
+    def _emit_attempt_telemetry(
+        self,
+        status: int | None,
+        error: dict | None,
+        duration: float,
+    ) -> None:
+        """Emit the per-attempt telemetry shared by both request shapes."""
+        telemetry.incr("attempts_total")
+        telemetry.observe_latency(duration)
+        if error is not None:
+            telemetry.incr("upstream_errors_total", {"type": error["type"]})
+            telemetry.set_upstream_down(True)
+        elif status is not None:
+            telemetry.set_upstream_down(False)
+
+    async def _retry_decision(
+        self,
+        diagnosis,
+        attempt: int,
+        max_attempts: int,
+    ) -> str | None:
+        """Decide the next step for a failed attempt, shared by both shapes.
+
+        Returns ``"context_window"`` (terminal overflow — caller builds its
+        bespoke response), ``"retry"`` (backed off and slept; caller continues
+        the loop), or ``None`` (final: caller settles on the outcome or gives
+        up). Centralising ``should_retry``, backoff/sleep, and the
+        context-window special case here keeps the buffered and streaming
+        retry loops from drifting apart.
+        """
+        policy = self.retry_policy
+        if diagnosis is not None and diagnosis.code == CONTEXT_WINDOW_CODE:
+            telemetry.incr("requests_total", {"outcome": "context_window_exceeded"})
+            telemetry.incr("context_window_aborts_total")
+            return "context_window"
+        if policy.should_retry(diagnosis, attempt):
+            delay = policy.backoff.delay(attempt)
+            telemetry.incr("retries_total")
+            logger.warning(
+                "retrying in %.2fs (attempt %d/%d)",
+                delay,
+                attempt + 1,
+                max_attempts,
+            )
+            await asyncio.sleep(delay)
+            return "retry"
+        return None
+
     async def forward(self, request: Request, path: str) -> Response:
         method = request.method
         body = await request.body()
@@ -527,30 +575,13 @@ class Proxy:
                 }
             )
 
-            telemetry.incr("attempts_total")
-            telemetry.observe_latency(time.time() - started)
-            if error is not None:
-                telemetry.incr("upstream_errors_total", {"type": error["type"]})
-                telemetry.set_upstream_down(True)
-            elif status is not None:
-                telemetry.set_upstream_down(False)
+            self._emit_attempt_telemetry(status, error, time.time() - started)
 
             # Action: retry with backoff, or settle on the final outcome.
-            if policy.should_retry(diagnosis, attempt):
-                delay = policy.backoff.delay(attempt)
-                telemetry.incr("retries_total")
-                logger.warning(
-                    "retrying in %.2fs (attempt %d/%d)",
-                    delay,
-                    attempt + 1,
-                    policy.max_attempts,
-                )
-                await asyncio.sleep(delay)
+            decision = await self._retry_decision(diagnosis, attempt, policy.max_attempts)
+            if decision == "retry":
                 continue
-
-            if diagnosis is not None and diagnosis.code == CONTEXT_WINDOW_CODE:
-                telemetry.incr("requests_total", {"outcome": "context_window_exceeded"})
-                telemetry.incr("context_window_aborts_total")
+            if decision == "context_window":
                 return _context_window_error_response(status, resp_body, resp_headers, diagnosis)
 
             if status is None:
@@ -782,13 +813,7 @@ class Proxy:
                     diagnosis,
                 )
 
-            telemetry.incr("attempts_total")
-            telemetry.observe_latency(time.time() - started)
-            if error is not None:
-                telemetry.incr("upstream_errors_total", {"type": error["type"]})
-                telemetry.set_upstream_down(True)
-            elif status is not None:
-                telemetry.set_upstream_down(False)
+            self._emit_attempt_telemetry(status, error, time.time() - started)
 
             # Content verdict (loop or stalled) -> terminal; never retry.
             # Retrying just re-enters the loop, or re-waits for a silent model.
@@ -850,28 +875,15 @@ class Proxy:
                         "duration": time.time() - started,
                     }
                 )
-                if diagnosis is not None and diagnosis.code == CONTEXT_WINDOW_CODE:
-                    telemetry.incr(
-                        "requests_total",
-                        {"outcome": "context_window_exceeded"},
-                    )
-                    telemetry.incr("context_window_aborts_total")
+                decision = await self._retry_decision(diagnosis, attempt, policy.max_attempts)
+                if decision == "retry":
+                    continue
+                if decision == "context_window":
                     return _StreamResult(
                         response=_context_window_error_response(
                             status, error_body, resp_headers, diagnosis
                         )
                     )
-                if policy.should_retry(diagnosis, attempt):
-                    delay = policy.backoff.delay(attempt)
-                    telemetry.incr("retries_total")
-                    logger.warning(
-                        "retrying in %.2fs (attempt %d/%d)",
-                        delay,
-                        attempt + 1,
-                        policy.max_attempts,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
                 telemetry.incr("requests_total", {"outcome": "upstream_failure"})
                 return _StreamResult(
                     response=Response(
@@ -896,28 +908,15 @@ class Proxy:
                         "duration": time.time() - started,
                     }
                 )
-                if diagnosis is not None and diagnosis.code == CONTEXT_WINDOW_CODE:
-                    telemetry.incr(
-                        "requests_total",
-                        {"outcome": "context_window_exceeded"},
-                    )
-                    telemetry.incr("context_window_aborts_total")
+                decision = await self._retry_decision(diagnosis, attempt, policy.max_attempts)
+                if decision == "retry":
+                    continue
+                if decision == "context_window":
                     return _StreamResult(
                         response=_context_window_error_response(
                             status, error_body, resp_headers, diagnosis
                         )
                     )
-                if policy.should_retry(diagnosis, attempt):
-                    delay = policy.backoff.delay(attempt)
-                    telemetry.incr("retries_total")
-                    logger.warning(
-                        "retrying in %.2fs (attempt %d/%d)",
-                        delay,
-                        attempt + 1,
-                        policy.max_attempts,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
                 telemetry.incr("requests_total", {"outcome": "http_error"})
                 err_headers, ctype = _filtered_headers(resp_headers)
                 return _StreamResult(

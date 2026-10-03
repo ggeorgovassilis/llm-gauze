@@ -110,6 +110,25 @@ def _diagnosis_entry(diagnosis) -> dict | None:
     return entry
 
 
+def _attempt_outcome(status: int | None, error: dict | None, diagnosis) -> str:
+    """Classify a recorded exchange into the stable ``outcome`` vocabulary.
+
+    Persists the same labels telemetry already emits as the ``outcome`` label
+    on ``requests_total``, so a consumer can route a record by ``outcome``
+    instead of key-sniffing which fields happen to be present. Verdict aborts
+    do not use this helper — they take ``route.outcome`` directly.
+    """
+    if diagnosis is not None and diagnosis.code == DiagnosisCode.CONTEXT_WINDOW_EXCEEDED:
+        return DiagnosisCode.CONTEXT_WINDOW_EXCEEDED.value
+    if error is not None:
+        return "upstream_failure"
+    if status is None:
+        return "upstream_failure"
+    if status >= 400:
+        return "http_error"
+    return "success"
+
+
 def _is_chat_completion(path: str) -> bool:
     """Whether this path is an OpenAI chat-completion request."""
     return path.rstrip("/").endswith("/chat/completions")
@@ -557,25 +576,29 @@ class Proxy:
                     diagnosis,
                 )
 
-            # Data collection: record every attempt, whatever the outcome.
+            self._emit_attempt_telemetry(status, error, time.time() - started)
+
+            # Action: retry with backoff, or settle on the final outcome.
+            decision = await self._retry_decision(diagnosis, attempt, policy.max_attempts)
+
+            # Data collection: record every attempt. `response_body` holds only
+            # what is actually delivered to the client — a retried attempt's
+            # body is discarded, so it is recorded as null.
             self.recorder.record(
                 {
                     **base_entry,
                     "attempt": attempt,
                     "max_attempts": policy.max_attempts,
+                    "outcome": _attempt_outcome(status, error, diagnosis),
                     "status": status,
                     "response_headers": resp_headers,
-                    "response_body": _decode(resp_body),
+                    "response_body": _decode(resp_body) if decision != "retry" else None,
                     "error": error,
                     "diagnosis": _diagnosis_entry(diagnosis),
                     "duration": time.time() - started,
                 }
             )
 
-            self._emit_attempt_telemetry(status, error, time.time() - started)
-
-            # Action: retry with backoff, or settle on the final outcome.
-            decision = await self._retry_decision(diagnosis, attempt, policy.max_attempts)
             if decision == "retry":
                 continue
             if decision == "context_window":
@@ -815,12 +838,15 @@ class Proxy:
             # Content verdict (loop or stalled) -> terminal; never retry.
             # Retrying just re-enters the loop, or re-waits for a silent model.
             if loop_verdict is not None:
+                route = route_for(loop_verdict.kind)
                 self.recorder.record(
                     {
                         **base_entry,
                         "attempt": attempt,
                         "max_attempts": policy.max_attempts,
+                        "outcome": route.outcome,
                         "status": status,
+                        "response_body": None,
                         "abort_kind": loop_verdict.kind,
                         "abort_stream": loop_stream,
                         "abort_reason": loop_verdict.reason,
@@ -833,7 +859,6 @@ class Proxy:
                         "duration": time.time() - started,
                     }
                 )
-                route = route_for(loop_verdict.kind)
                 telemetry.incr("requests_total", {"outcome": route.outcome})
                 if route.stream_labeled:
                     telemetry.incr(route.abort_metric, {"stream": loop_stream or "unknown"})
@@ -862,8 +887,10 @@ class Proxy:
                         **base_entry,
                         "attempt": attempt,
                         "max_attempts": policy.max_attempts,
+                        "outcome": _attempt_outcome(status, error, diagnosis),
                         "status": status,
                         "response_headers": resp_headers,
+                        "response_body": None,
                         "error": error,
                         "diagnosis": _diagnosis_entry(diagnosis),
                         "duration": time.time() - started,
@@ -890,19 +917,20 @@ class Proxy:
             # HTTP error status -> retry or return it.
             if status is not None and status >= 400:
                 diagnosis = policy.detector.diagnose_status(status, body=error_body)
+                decision = await self._retry_decision(diagnosis, attempt, policy.max_attempts)
                 self.recorder.record(
                     {
                         **base_entry,
                         "attempt": attempt,
                         "max_attempts": policy.max_attempts,
+                        "outcome": _attempt_outcome(status, None, diagnosis),
                         "status": status,
                         "response_headers": resp_headers,
-                        "response_body": _decode(error_body),
+                        "response_body": _decode(error_body) if decision != "retry" else None,
                         "diagnosis": _diagnosis_entry(diagnosis),
                         "duration": time.time() - started,
                     }
                 )
-                decision = await self._retry_decision(diagnosis, attempt, policy.max_attempts)
                 if decision == "retry":
                     continue
                 if decision == "context_window":
@@ -961,7 +989,7 @@ class Proxy:
         nudge_attempt: int,
     ) -> None:
         """Record an empty-text turn that triggered a nudge re-submission."""
-        final_body = json.dumps(
+        turn_body = json.dumps(
             _reconstruct_chat_completion(
                 result.meta, result.content, result.reasoning, result.tool_calls
             )
@@ -971,9 +999,11 @@ class Proxy:
                 **base_entry,
                 "attempt": result.attempt,
                 "max_attempts": result.max_attempts,
+                "outcome": "success",
                 "status": result.status,
                 "response_headers": result.resp_headers,
-                "response_body": _decode(final_body),
+                "response_body": None,
+                "pre_remediation_body": _decode(turn_body),
                 "streamed": client_wants_stream,
                 "think_cleanup": result.relocate_changes or None,
                 "nudge": {"attempt": nudge_attempt, "outcome": "triggered"},
@@ -990,7 +1020,7 @@ class Proxy:
         coast_attempt: int,
     ) -> None:
         """Record a coasted turn that triggered a re-prompt re-submission."""
-        final_body = json.dumps(
+        turn_body = json.dumps(
             _reconstruct_chat_completion(
                 result.meta, result.content, result.reasoning, result.tool_calls
             )
@@ -1000,9 +1030,11 @@ class Proxy:
                 **base_entry,
                 "attempt": result.attempt,
                 "max_attempts": result.max_attempts,
+                "outcome": "success",
                 "status": result.status,
                 "response_headers": result.resp_headers,
-                "response_body": _decode(final_body),
+                "response_body": None,
+                "pre_remediation_body": _decode(turn_body),
                 "streamed": client_wants_stream,
                 "think_cleanup": result.relocate_changes or None,
                 "coast": {"attempt": coast_attempt, "outcome": "triggered"},
@@ -1029,8 +1061,10 @@ class Proxy:
                 **base_entry,
                 "attempt": result.attempt,
                 "max_attempts": result.max_attempts,
+                "outcome": "runaway_reasoning_aborted",
                 "status": result.status,
                 "response_headers": result.resp_headers,
+                "response_body": None,
                 "runaway": {
                     "attempt": runaway_attempt,
                     "outcome": "triggered",
@@ -1059,8 +1093,10 @@ class Proxy:
                 **base_entry,
                 "attempt": result.attempt,
                 "max_attempts": result.max_attempts,
+                "outcome": "loop_aborted",
                 "status": result.status,
                 "response_headers": result.resp_headers,
+                "response_body": None,
                 "loop_retry": {
                     "attempt": loop_retry_attempt,
                     "outcome": "triggered",
@@ -1111,6 +1147,7 @@ class Proxy:
                 **base_entry,
                 "attempt": result.attempt,
                 "max_attempts": result.max_attempts,
+                "outcome": "success",
                 "status": result.status,
                 "response_headers": result.resp_headers,
                 "response_body": _decode(final_body),

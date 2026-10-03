@@ -43,7 +43,10 @@ services:
       - PYTHONDONTWRITEBYTECODE=1
     volumes:
       # Mount source and tests for fast iteration; the image's pyproject.toml
-      # keeps `pythonpath = ["source"]` resolving correctly.
+      # keeps `pythonpath = ["source"]` resolving correctly. .env.example and
+      # docs/ are mounted for the config-drift test (tests/test_config.py).
       - ./source:/app/source
       - ./tests:/app/tests
+      - ./.env.example:/app/.env.example
+      - ./docs:/app/docs
     command: pytest

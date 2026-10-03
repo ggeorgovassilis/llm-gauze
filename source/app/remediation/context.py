@@ -10,7 +10,7 @@ attempts and then returning a misleading generic 502.
 """
 
 from app.config import settings
-from app.remediation.base import Detector, Diagnosis
+from app.remediation.base import Detector, Diagnosis, DiagnosisCode
 
 # Default substrings (matched case-insensitively) that llama.cpp emits when the
 # context window fills. Kept exact — never word-fuzzy — so there are no false
@@ -28,7 +28,9 @@ _DEFAULT_MARKERS = (
     "exceeds the available context size",
 )
 
-CONTEXT_WINDOW_CODE = "context_window_exceeded"
+# Backward-compatible alias; the typed constant is
+# ``DiagnosisCode.CONTEXT_WINDOW_EXCEEDED``.
+CONTEXT_WINDOW_CODE = DiagnosisCode.CONTEXT_WINDOW_EXCEEDED
 
 
 def _decode(body: bytes | None) -> str:

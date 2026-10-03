@@ -13,6 +13,32 @@ the proxy directly.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
+
+
+class VerdictKind(str, Enum):
+    """Machine-readable kind of a content-stream verdict.
+
+    Detectors *construct* verdicts with these constants and the proxy *routes*
+    them through the registry in :mod:`app.remediation.verdicts`. Using an enum
+    means a misspelled kind fails at import/attribute access instead of
+    silently falling through to a default branch at runtime.
+    """
+
+    LOOP = "loop"
+    STALLED = "stalled"
+    RUNAWAY_REASONING = "runaway_reasoning"
+
+
+class DiagnosisCode(str, Enum):
+    """Machine-readable diagnosis codes the proxy routes on.
+
+    The context-window overflow is the one diagnosis that short-circuits the
+    retry loop; like :class:`VerdictKind` it is typed so a misspelled code
+    fails at import rather than runtime.
+    """
+
+    CONTEXT_WINDOW_EXCEEDED = "context_window_exceeded"
 
 
 @dataclass
@@ -21,8 +47,8 @@ class Diagnosis:
 
     retryable: bool
     reason: str
-    # Optional machine-readable code (e.g. ``"context_window_exceeded"``) that
-    # lets the proxy route a verdict to a bespoke response instead of the
+    # Optional machine-readable code (e.g. ``DiagnosisCode.CONTEXT_WINDOW_EXCEEDED``)
+    # that lets the proxy route a verdict to a bespoke response instead of the
     # generic pass-through/502 path. ``None`` for plain retry/status verdicts.
     code: str | None = None
 
@@ -73,11 +99,11 @@ class RetryPolicy:
 class StreamVerdict:
     """The understanding layer's verdict about a content stream.
 
-    ``kind`` describes what was detected (e.g. ``"loop"``); ``reason`` is a
+    ``kind`` is the :class:`VerdictKind` that was detected; ``reason`` is a
     human-readable explanation and ``details`` carries machine-readable extras.
     """
 
-    kind: str
+    kind: VerdictKind
     reason: str | None = None
     details: dict = field(default_factory=dict)
 

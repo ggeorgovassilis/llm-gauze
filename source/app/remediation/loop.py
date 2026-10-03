@@ -26,7 +26,7 @@ without the gateway.
 import zlib
 
 from app.config import settings
-from app.remediation.base import ContentWatchdog, StreamVerdict
+from app.remediation.base import ContentWatchdog, StreamVerdict, VerdictKind
 
 
 class ThinkingLoopDetector(ContentWatchdog):
@@ -95,7 +95,7 @@ class ThinkingLoopDetector(ContentWatchdog):
         ratio = self._compression_ratio(window)
         if ratio < self.compression_ratio:
             return StreamVerdict(
-                kind="loop",
+                kind=VerdictKind.LOOP,
                 reason=f"low entropy (compression ratio {ratio:.2f})",
                 details={"compression_ratio": ratio, "window_bytes": len(window)},
             )

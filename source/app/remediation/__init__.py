@@ -16,11 +16,13 @@ from app.remediation.base import (
     ContentWatchdog,
     Detector,
     Diagnosis,
+    DiagnosisCode,
     Remediation,
     RetryPolicy,
     StreamVerdict,
     Transform,
     Turn,
+    VerdictKind,
 )
 from app.remediation.coast import CoastPolicy
 from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
@@ -37,9 +39,11 @@ __all__ = [
     "Backoff",
     "Detector",
     "Diagnosis",
+    "DiagnosisCode",
     "RetryPolicy",
     "ContentWatchdog",
     "StreamVerdict",
+    "VerdictKind",
     "Remediation",
     "Transform",
     "Turn",

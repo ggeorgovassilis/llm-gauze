@@ -68,6 +68,20 @@ def test_no_rotation_when_file_absent_on_second_run():
         assert sorted(p.name for p in Path(tmp).iterdir()) == ["records.jsonl"]
 
 
+def test_concurrent_records_preserve_call_order():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "records.jsonl"
+        recorder = Recorder(path)
+
+        async def record_all():
+            await asyncio.gather(*(recorder.record({"seq": i}) for i in range(100)))
+
+        asyncio.run(record_all())
+
+        seqs = [json.loads(line)["seq"] for line in path.read_text().splitlines()]
+        assert seqs == list(range(100))
+
+
 def _run_all() -> int:
     tests = [
         value

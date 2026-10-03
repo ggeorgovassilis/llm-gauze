@@ -6,13 +6,10 @@ boundary, input immutability). Integration tests drive the real `Proxy.forward`
 through both the buffered path (loop detection off) and the streaming path
 (loop detection on), asserting the mock upstream received the warned/truncated
 body and the recorder captured the intervention — plus a disabled-switch no-op.
-
-    docker compose exec -T gateway python - < tests/test_overflow.py
 """
 
 import asyncio
 import json
-import traceback
 
 from app.proxy import Proxy
 from app.recorder import Recorder
@@ -256,28 +253,3 @@ def test_disabled_is_noop():
     # The upstream received the full, unmodified tool result.
     assert captured["messages"][1]["content"] == "first line\n" + "x" * 1000
     assert records[-1].get("message_overflow") is None, records[-1]
-
-
-def _run_all() -> int:
-    tests = [
-        value
-        for key, value in sorted(globals().items())
-        if key.startswith("test_") and callable(value)
-    ]
-    failed = 0
-    for test in tests:
-        try:
-            test()
-            print(f"PASS {test.__name__}")
-        except Exception:  # noqa: BLE001 - report and continue
-            failed += 1
-            print(f"FAIL {test.__name__}")
-            traceback.print_exc()
-    print(f"\n{len(tests) - failed}/{len(tests)} passed")
-    return failed
-
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(1 if _run_all() else 0)

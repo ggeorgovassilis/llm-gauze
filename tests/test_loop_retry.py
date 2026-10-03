@@ -1,7 +1,6 @@
 """Unit tests for the loop-retry policy (varied-sampling re-submission)."""
 
 import sys
-import traceback
 
 sys.path.insert(0, "source")
 
@@ -87,26 +86,3 @@ def test_apply_mixed_fallback_and_bump():
     # omitted -> fallback
     assert out["repeat_penalty"] == 1.2, out
     assert body["temperature"] == 0.0, body
-
-
-def _run_all() -> int:
-    tests = [
-        value
-        for key, value in sorted(globals().items())
-        if key.startswith("test_") and callable(value)
-    ]
-    failed = 0
-    for test in tests:
-        try:
-            test()
-            print(f"PASS {test.__name__}")
-        except Exception:  # noqa: BLE001
-            failed += 1
-            print(f"FAIL {test.__name__}")
-            traceback.print_exc()
-    print(f"\n{len(tests) - failed}/{len(tests)} passed")
-    return failed
-
-
-if __name__ == "__main__":
-    sys.exit(1 if _run_all() else 0)

@@ -1,12 +1,6 @@
-"""Unit tests for the telemetry registry and its renderers.
-
-Runs with plain Python (stdlib only) inside the container:
-
-    docker compose exec -T gateway python - < tests/test_telemetry.py
-"""
+"""Unit tests for the telemetry registry and its renderers."""
 
 import json
-import traceback
 
 try:
     from app.telemetry import Telemetry
@@ -103,33 +97,3 @@ def test_json_snapshot_is_serialisable():
     t.observe_latency(1.0)
     # Must not raise on JSON serialisation (floats, ints, None all fine).
     json.dumps(t.snapshot())
-
-
-def _run_all():
-    import inspect
-
-    funcs = [
-        (name, obj)
-        for name, obj in inspect.getmembers(
-            inspect.getmodule(inspect.currentframe()),
-            inspect.isfunction,
-        )
-        if name.startswith("test_")
-    ]
-    failures = []
-    for name, func in funcs:
-        try:
-            func()
-            print(f"PASS {name}")
-        except AssertionError:
-            failures.append(name)
-            print(f"FAIL {name}")
-            traceback.print_exc()
-    if failures:
-        print(f"\n{len(failures)} failed: {failures}")
-        raise SystemExit(1)
-    print(f"\n{len(funcs)} tests passed")
-
-
-if __name__ == "__main__":
-    _run_all()

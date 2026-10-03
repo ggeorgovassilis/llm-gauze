@@ -7,13 +7,10 @@ upstream that returns a reasoning-only turn on the first request and real
 content on the second — proving the nudge re-submits and returns the real
 answer — plus a second case proving the budget is honoured and the placeholder
 floor is reached when nudging keeps failing.
-
-    docker compose exec -T gateway python - < tests/test_nudge.py
 """
 
 import asyncio
 import json
-import traceback
 
 from app.proxy import Proxy
 from app.recorder import Recorder
@@ -180,28 +177,3 @@ def test_no_nudge_when_content_present():
     assert data["choices"][0]["message"]["content"] == "the real answer", data
     assert count == 1, count
     assert records[-1].get("nudge") is None, records[-1]
-
-
-def _run_all() -> int:
-    tests = [
-        value
-        for key, value in sorted(globals().items())
-        if key.startswith("test_") and callable(value)
-    ]
-    failed = 0
-    for test in tests:
-        try:
-            test()
-            print(f"PASS {test.__name__}")
-        except Exception:  # noqa: BLE001 - report and continue
-            failed += 1
-            print(f"FAIL {test.__name__}")
-            traceback.print_exc()
-    print(f"\n{len(tests) - failed}/{len(tests)} passed")
-    return failed
-
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(1 if _run_all() else 0)

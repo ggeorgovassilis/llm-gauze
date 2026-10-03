@@ -6,13 +6,10 @@ paths (buffered `forward` and `_forward_streaming`) against a mock upstream
 that returns the canonical llama.cpp context-overflow error with a *retryable*
 status — proving the gateway fails fast (one attempt) and passes the upstream's
 error through verbatim instead of retrying a doomed request or translating it.
-
-    docker compose exec -T gateway python - < tests/test_context_window.py
 """
 
 import asyncio
 import json
-import traceback
 
 from app.proxy import Proxy
 from app.recorder import Recorder
@@ -186,28 +183,3 @@ def test_streaming_fails_fast():
         # The upstream's own error is forwarded verbatim, not translated.
         assert json.loads(resp.body) == _LLAMACPP_ERROR, resp.body
         assert mock.request_count == 1
-
-
-def _run_all() -> int:
-    tests = [
-        value
-        for key, value in sorted(globals().items())
-        if key.startswith("test_") and callable(value)
-    ]
-    failed = 0
-    for test in tests:
-        try:
-            test()
-            print(f"PASS {test.__name__}")
-        except Exception:  # noqa: BLE001 - report and continue
-            failed += 1
-            print(f"FAIL {test.__name__}")
-            traceback.print_exc()
-    print(f"\n{len(tests) - failed}/{len(tests)} passed")
-    return failed
-
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(1 if _run_all() else 0)

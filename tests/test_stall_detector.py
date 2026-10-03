@@ -1,11 +1,4 @@
-"""Unit tests for the stalled-stream detector.
-
-Runs with plain Python (stdlib only) inside the container:
-
-    docker compose exec -T gateway python - < tests/test_stall_detector.py
-"""
-
-import traceback
+"""Unit tests for the stalled-stream detector."""
 
 try:
     from app.remediation.base import VerdictKind
@@ -95,28 +88,3 @@ def test_verdict_after_first_token_mentions_gap():
     assert "content-bearing token" in verdict.reason, verdict
     assert verdict.details["saw_first_token"] is True
     assert verdict.details["elapsed_seconds"] == 5.0
-
-
-def _run_all() -> int:
-    tests = [
-        value
-        for key, value in sorted(globals().items())
-        if key.startswith("test_") and callable(value)
-    ]
-    failed = 0
-    for test in tests:
-        try:
-            test()
-            print(f"PASS {test.__name__}")
-        except Exception:  # noqa: BLE001 - report and continue
-            failed += 1
-            print(f"FAIL {test.__name__}")
-            traceback.print_exc()
-    print(f"\n{len(tests) - failed}/{len(tests)} passed")
-    return failed
-
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(1 if _run_all() else 0)

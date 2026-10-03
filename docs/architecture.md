@@ -28,7 +28,9 @@ client ──▶ gateway (FastAPI) ──▶ recorder (JSONL)
 - `app/proxy.py` — forwarding seam; records each attempt and delegates
   failure handling to the remediation pipeline. Uses `httpx.Timeout` with
   separate `connect`/`pool` and `read`/`write` values.
-- `app/recorder.py` — append-only JSONL recording of exchanges/attempts.
+- `app/recorder.py` — append-only JSONL recording of exchanges/attempts. The
+  stabilised record field contract is documented in
+  [`record-schema.md`](record-schema.md).
 - `app/remediation/` — the pluggable remediation pipeline (below).
 
 ## Separation of concerns

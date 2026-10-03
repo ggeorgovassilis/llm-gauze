@@ -26,10 +26,10 @@ without the gateway.
 import zlib
 
 from app.config import settings
-from app.remediation.base import StreamDetector, StreamVerdict
+from app.remediation.base import ContentWatchdog, StreamVerdict
 
 
-class ThinkingLoopDetector(StreamDetector):
+class ThinkingLoopDetector(ContentWatchdog):
     """Detect loops in a text stream via byte-window compression entropy."""
 
     def __init__(
@@ -55,26 +55,31 @@ class ThinkingLoopDetector(StreamDetector):
             compression_ratio=settings.loop_compression_ratio,
         )
 
-    def feed(self, text: str) -> StreamVerdict | None:
-        """Feed arbitrary text; returns a verdict iff a loop is detected.
+    def note(
+        self,
+        *,
+        reasoning: str | None = None,
+        content: str | None = None,
+        tool_calls: list | None = None,
+    ) -> None:
+        """Accumulate the generated text (reasoning and/or content)."""
+        for text in (reasoning, content):
+            if text:
+                self._buffer += text
+
+    def check(self) -> StreamVerdict | None:
+        """Return a loop verdict iff the detector has armed and tripped.
 
         ``None`` means "no loop (yet)". Until ``min_output_bytes`` have been
         produced the detector is not armed and always returns ``None``.
         """
-        if not text:
-            return None
-        self._buffer += text
         if len(self._buffer) < self.min_output_bytes:
             return None
         return self._check_window()
 
-    def flush(self) -> StreamVerdict | None:
-        """Run a final check over the trailing buffer, if any."""
-        verdict = None
-        if self._buffer:
-            verdict = self._check_window()
-        self._buffer = ""
-        return verdict
+    def remaining(self) -> float | None:
+        """Text-based watchdog: no time limit."""
+        return None
 
     def reset(self) -> None:
         """Clear all state so the detector can be reused for a new stream."""

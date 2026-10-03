@@ -27,17 +27,17 @@ without the gateway.
 """
 
 from app.config import settings
-from app.remediation.base import StreamVerdict
+from app.remediation.base import ContentWatchdog, StreamVerdict
 
 
-class RunawayReasoningDetector:
+class RunawayReasoningDetector(ContentWatchdog):
     """Flag a turn that keeps reasoning without ever producing an answer.
 
-    Driven manually by the streaming loop (like :class:`StallDetector`): call
-    :meth:`note_reasoning` on each reasoning delta and :meth:`note_content` when
-    any visible content or tool-call fragment arrives. :attr:`triggered` becomes
-    True once the reasoning token budget is exceeded while no content has
-    appeared — a tool call counts as content (the model *is* acting).
+    Implements the uniform :class:`ContentWatchdog` contract: the pipeline
+    calls :meth:`note` with each reasoning delta and every visible-content or
+    tool-call fragment; :meth:`check` then returns a verdict once the reasoning
+    token budget is exceeded while no content has appeared — a tool call counts
+    as content (the model *is* acting).
     """
 
     # Characters per token approximation (matches the loop detector's
@@ -53,25 +53,39 @@ class RunawayReasoningDetector:
     def from_settings(cls) -> "RunawayReasoningDetector":
         return cls(settings.runaway_reasoning_token_threshold)
 
-    def note_reasoning(self, text: str) -> None:
-        """Record reasoning text (accumulates the token budget)."""
-        if text:
-            self._reasoning_chars += len(text)
+    def note(
+        self,
+        *,
+        reasoning: str | None = None,
+        content: str | None = None,
+        tool_calls: list | None = None,
+    ) -> None:
+        """Record reasoning text (accumulates the budget) and content/tool-calls."""
+        if reasoning:
+            self._reasoning_chars += len(reasoning)
+        if content or tool_calls:
+            self._saw_content = True
 
-    def note_content(self) -> None:
-        """Record that visible content (or a tool call) has appeared."""
-        self._saw_content = True
+    def check(self) -> StreamVerdict | None:
+        """Return the runaway verdict iff the budget is exceeded with no content."""
+        if self._saw_content:
+            return None
+        if self._reasoning_chars >= self.token_threshold * self.CHARS_PER_TOKEN:
+            return self.verdict()
+        return None
+
+    def remaining(self) -> float | None:
+        """Token-count watchdog: no time limit."""
+        return None
+
+    def reset(self) -> None:
+        """Clear state so the watchdog can be reused for a new stream."""
+        self._reasoning_chars = 0
+        self._saw_content = False
 
     @property
     def reasoning_tokens(self) -> int:
         return int(self._reasoning_chars / self.CHARS_PER_TOKEN)
-
-    @property
-    def triggered(self) -> bool:
-        """True once the reasoning budget is exceeded with no content yet."""
-        if self._saw_content:
-            return False
-        return self._reasoning_chars >= self.token_threshold * self.CHARS_PER_TOKEN
 
     def verdict(self) -> StreamVerdict:
         """Build the abort verdict for a runaway-reasoning stream."""

@@ -13,10 +13,10 @@ detection, ...) implement these interfaces rather than editing the proxy.
 
 from app.remediation.base import (
     Backoff,
+    ContentWatchdog,
     Detector,
     Diagnosis,
     RetryPolicy,
-    StreamDetector,
     StreamVerdict,
 )
 from app.remediation.coast import CoastPolicy
@@ -35,7 +35,7 @@ __all__ = [
     "Detector",
     "Diagnosis",
     "RetryPolicy",
-    "StreamDetector",
+    "ContentWatchdog",
     "StreamVerdict",
     "ExponentialBackoff",
     "RetryableDetector",

@@ -47,11 +47,11 @@ failure ──▶ Detector (understanding) ──▶ Diagnosis ──▶ Backoff
 ```
 
 - `app/remediation/base.py` — abstract `Detector`, `Backoff`, `Diagnosis`,
-  `RetryPolicy`, plus `StreamDetector`/`StreamVerdict` for content streams.
+  `RetryPolicy`, plus `ContentWatchdog`/`StreamVerdict` for content streams.
 - `app/remediation/retry.py` — `RetryableDetector` (transient exceptions +
   retryable HTTP statuses) and `ExponentialBackoff` (with optional jitter).
 - `app/remediation/loop.py` — `ThinkingLoopDetector`, a stateful
-  `StreamDetector` that flags repetitive output via byte-window compression
+  `ContentWatchdog` that flags repetitive output via byte-window compression
   entropy.
 - `app/remediation/stall.py` — `StallDetector`, a time-based watchdog that
   flags a stream which has stopped producing content tokens (silent hang).
@@ -159,10 +159,12 @@ Stall detection is therefore a **time** signal rather than a content signal:
 - On detection the gateway records `abort_kind=stalled` and returns a
   `stall_abort_status` error (never retried).
 
-Unlike `ThinkingLoopDetector`, `StallDetector` observes time, not text, so it
-is driven directly by the streaming loop rather than through the
-`StreamDetector.feed()` interface. It takes an injectable monotonic clock so it
-is unit-testable without sleeping.
+Unlike `ThinkingLoopDetector`, `StallDetector` observes time, not text. All
+three content watchdogs (`ThinkingLoopDetector`, `StallDetector`,
+`RunawayReasoningDetector`) implement one uniform `ContentWatchdog` contract
+(`note`/`check`/`remaining`/`reset`), so the streaming pipeline drives them
+identically. `StallDetector` takes an injectable monotonic clock so it is
+unit-testable without sleeping.
 
 
 ## Context-window overflow
@@ -302,8 +304,8 @@ tokens stay at zero**. Two windows observe it:
    (`RUNAWAY_REASONING_TOKEN_THRESHOLD`, ~4 chars/token) is exceeded with no
    content or tool call yet produced, the stream is aborted early so the
    remaining output budget can be spent on a retry that actually answers. Like
-   `StallDetector` it is driven manually by the streaming loop, not through
-   `StreamDetector.feed()`.
+   `StallDetector` it is a `ContentWatchdog` driven by the streaming pipeline
+   through the uniform `note`/`check` contract.
 2. **Terminal** — the output window was exhausted (`finish_reason: "length"`)
    with reasoning present but no content and no tool calls: the model burned
    its entire budget thinking.

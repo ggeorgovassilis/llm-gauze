@@ -19,17 +19,19 @@ from fastapi import Request
 from fastapi.responses import Response
 
 from app.config import settings
+from app.pipeline import (  # noqa: F401  (_merge_tool_calls re-exported for tests)
+    StreamingPipeline,
+    _merge_tool_calls,
+)
 from app.recorder import Recorder
 from app.remediation.base import Detector, RetryPolicy, StreamVerdict
 from app.remediation.coast import CoastPolicy
 from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
-from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.loop_retry import LoopRetryPolicy
 from app.remediation.nudge import NudgePolicy
 from app.remediation.overflow import MessageOverflowGuard
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
-from app.remediation.runaway import RunawayReasoningDetector, RunawayReasoningPolicy
-from app.remediation.stall import StallDetector
+from app.remediation.runaway import RunawayReasoningPolicy
 from app.remediation.think import ThinkContentGuard
 from app.remediation.tool_call import ToolCallGuard
 from app.telemetry import telemetry
@@ -158,68 +160,6 @@ def _apply_overflow_guard(body: bytes) -> tuple[list, bytes]:
     if not changes:
         return [], body
     return changes, json.dumps(data).encode("utf-8")
-
-
-def _extract_stream_chunk(
-    chunk: dict,
-) -> tuple[str | None, str | None, list | None, dict]:
-    """Pull (content, reasoning, tool_calls, meta) from one SSE payload.
-
-    Tolerates the common OpenAI-compatible shapes: ``delta`` vs ``message``,
-    ``reasoning_content`` / ``reasoning`` / ``thinking`` for the thinking
-    stream, and streaming ``tool_calls`` fragments for tool use.
-    """
-    choices = chunk.get("choices") or []
-    choice = choices[0] if choices else {}
-    delta = choice.get("delta") or choice.get("message") or {}
-    content = delta.get("content")
-    reasoning = delta.get("reasoning_content") or delta.get("reasoning") or delta.get("thinking")
-    tool_calls = delta.get("tool_calls")
-    meta = {
-        "id": chunk.get("id"),
-        "model": chunk.get("model"),
-        "created": chunk.get("created"),
-        "role": delta.get("role"),
-        "finish_reason": choice.get("finish_reason"),
-        "usage": chunk.get("usage"),
-    }
-    return content, reasoning, tool_calls, meta
-
-
-def _merge_meta(meta: dict, chunk_meta: dict) -> None:
-    """Merge non-None metadata fields into the accumulator (last wins)."""
-    for key, value in chunk_meta.items():
-        if value is not None:
-            meta[key] = value
-
-
-def _merge_tool_calls(accumulator: list, deltas: list | None) -> None:
-    """Accumulate OpenAI streaming tool-call fragments by ``index``.
-
-    The first fragment carries ``id`` / ``type`` / ``function.name``; later
-    fragments append to ``function.arguments``. Fragments for the same index
-    are merged into one entry.
-    """
-    for fragment in deltas or []:
-        if not isinstance(fragment, dict):
-            continue
-        index = fragment.get("index", 0)
-        while len(accumulator) <= index:
-            accumulator.append({})
-        slot = accumulator[index]
-        for key, value in fragment.items():
-            if key == "index":
-                continue
-            if key == "function" and isinstance(value, dict):
-                fn = slot.setdefault("function", {})
-                for fkey, fval in value.items():
-                    if fkey == "arguments":
-                        if fval is not None:
-                            fn["arguments"] = fn.get("arguments", "") + fval
-                    elif fval is not None:
-                        fn[fkey] = fval
-            elif value is not None:
-                slot[key] = value
 
 
 def _reconstruct_chat_completion(
@@ -414,6 +354,7 @@ class Proxy:
             ),
         )
         self.retry_policy = _build_retry_policy()
+        self.pipeline = StreamingPipeline(self.client)
 
     async def forward(self, request: Request, path: str) -> Response:
         method = request.method
@@ -750,155 +691,18 @@ class Proxy:
             loop_verdict: StreamVerdict | None = None
             loop_stream: str | None = None
 
-            thinking = ThinkingLoopDetector.from_settings()
-            response = ThinkingLoopDetector.from_settings()
-            runaway = (
-                RunawayReasoningDetector.from_settings()
-                if settings.runaway_reasoning_enabled
-                else None
-            )
-
             try:
-                async with self.client.stream(
-                    method,
-                    url,
-                    params=query,
-                    content=stream_body,
-                    headers=out_headers,
-                ) as upstream:
-                    status = upstream.status_code
-                    resp_headers = dict(upstream.headers)
-
-                    if status < 400:
-                        stall = (
-                            StallDetector.from_settings()
-                            if settings.stall_detection_enabled
-                            else None
-                        )
-                        lines = upstream.aiter_lines()
-                        while True:
-                            # Bound each read by the stall budget. Keepalive/
-                            # comment lines arrive without resetting the timer,
-                            # so a connection kept open by pings still trips the
-                            # watchdog once the model goes silent.
-                            timeout = max(0.0, stall.remaining()) if stall else None
-                            try:
-                                line = await asyncio.wait_for(anext(lines), timeout=timeout)
-                            except asyncio.TimeoutError:
-                                # A timeout can only occur when `stall` set a
-                                # budget; with stall detection disabled the
-                                # wait is unbounded and never raises here.
-                                assert stall is not None
-                                loop_verdict = stall.verdict()
-                                loop_stream = "stalled"
-                                break
-                            except StopAsyncIteration:
-                                break
-
-                            if not line or not line.startswith("data:"):
-                                continue
-                            # Keep the raw SSE line so a streaming client can
-                            # be served the upstream's exact event framing.
-                            sse_lines.append(line)
-                            payload = line[5:].strip()
-                            if not payload or payload == "[DONE]":
-                                continue
-                            try:
-                                chunk = json.loads(payload)
-                            except json.JSONDecodeError:
-                                continue
-
-                            (
-                                delta_content,
-                                delta_reasoning,
-                                delta_tool_calls,
-                                chunk_meta,
-                            ) = _extract_stream_chunk(chunk)
-                            _merge_meta(meta, chunk_meta)
-                            _merge_tool_calls(tool_calls, delta_tool_calls)
-
-                            # Any model-produced delta proves the model is
-                            # alive; reset the stall watchdog on those.
-                            # Tool-call fragments count too: a model slowly
-                            # streaming arguments is working, not stalled.
-                            if delta_reasoning or delta_content or delta_tool_calls:
-                                if stall is not None:
-                                    stall.note_token()
-
-                            # Visible content or a tool call means the model
-                            # answered/acted — disarm the runaway watchdog.
-                            if runaway is not None and (delta_content or delta_tool_calls):
-                                runaway.note_content()
-
-                            if delta_reasoning:
-                                reasoning += delta_reasoning
-                                if runaway is not None:
-                                    runaway.note_reasoning(delta_reasoning)
-                                verdict = thinking.feed(delta_reasoning)
-                                if verdict is not None:
-                                    loop_verdict = verdict
-                                    loop_stream = "thinking"
-                                    break
-                            if delta_content:
-                                content += delta_content
-                                verdict = response.feed(delta_content)
-                                if verdict is not None:
-                                    loop_verdict = verdict
-                                    loop_stream = "response"
-                                    break
-                            if runaway is not None and runaway.triggered:
-                                loop_verdict = runaway.verdict()
-                                loop_stream = "reasoning"
-                                break
-                    else:
-                        error_body = await upstream.aread()
-
-                if loop_verdict is None:
-                    loop_verdict = response.flush()
-                    if loop_verdict is not None:
-                        loop_stream = "response"
-                    else:
-                        loop_verdict = thinking.flush()
-                        if loop_verdict is not None:
-                            loop_stream = "thinking"
-
-                # The upstream filled the output window without the model
-                # finishing. llama.cpp reports this as ``n_tokens = 8191,
-                # truncated = 1`` and LiteLLM surfaces it as
-                # ``finish_reason: "length"``. That is a definitive runaway
-                # signal — the model never stopped — so treat it as a loop
-                # regardless of whether the content looked repetitive. This
-                # catches *drift* loops (near-identical but not verbatim)
-                # which the compression-ratio check above misses. When the
-                # window was spent *reasoning* with no content or tool calls
-                # at all, it is classified as runaway-reasoning instead (#17),
-                # which gets a stop-thinking nudge rather than varied sampling.
-                if loop_verdict is None and meta.get("finish_reason") == "length":
-                    if (
-                        settings.runaway_reasoning_enabled
-                        and (reasoning or "").strip()
-                        and not (content or "").strip()
-                        and not tool_calls
-                    ):
-                        loop_verdict = StreamVerdict(
-                            kind="runaway_reasoning",
-                            reason=(
-                                "output window exhausted while reasoning "
-                                "(finish_reason=length, no content)"
-                            ),
-                            details={
-                                "finish_reason": "length",
-                                "reasoning_tokens": int(len(reasoning) / 4),
-                            },
-                        )
-                        loop_stream = "reasoning"
-                    else:
-                        loop_verdict = StreamVerdict(
-                            kind="loop",
-                            reason=("output window exhausted (finish_reason=length)"),
-                            details={"finish_reason": "length"},
-                        )
-                        loop_stream = "response"
+                outcome = await self.pipeline.run(method, url, query, stream_body, out_headers)
+                status = outcome.status
+                resp_headers = outcome.resp_headers
+                error_body = outcome.error_body
+                loop_verdict = outcome.verdict
+                loop_stream = outcome.verdict_stream
+                content = outcome.content
+                reasoning = outcome.reasoning
+                tool_calls = outcome.tool_calls
+                meta = outcome.meta
+                sse_lines = outcome.sse_lines
             except Exception as exc:  # noqa: BLE001 - capture everything
                 error = {
                     "type": type(exc).__name__,

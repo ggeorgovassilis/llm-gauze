@@ -86,7 +86,7 @@ Detection and remediation are separate, pluggable concerns — see
 [`docs/architecture.md`](docs/architecture.md) for the design.
 
 - **Detectors** subclass the interfaces in `source/app/remediation/base.py`
-  (`Detector` for buffered requests, `StreamDetector` for content streams) and
+  (`Detector` for buffered requests, `ContentWatchdog` for content streams) and
   classify a failure into a `Diagnosis`.
 - **Remediation** policies (`NudgePolicy`, `CoastPolicy`, `LoopRetryPolicy`, …)
   turn a diagnosis into behaviour — a re-submission or a content transform.

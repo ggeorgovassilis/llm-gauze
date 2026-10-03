@@ -153,8 +153,11 @@ class StreamingPipeline:
         # One detector per concern. The loop detector observes reasoning and
         # content in separate windows (so a reasoning loop and a response loop
         # are distinguished), so it is instantiated twice.
-        thinking = ThinkingLoopDetector.from_settings()
-        response = ThinkingLoopDetector.from_settings()
+        # The loop detector is gated by its own switch so that entering the
+        # streaming path for another feature (stall, nudge, ...) does not
+        # silently re-enable loop detection the operator switched off.
+        thinking = ThinkingLoopDetector.from_settings() if settings.loop_detection_enabled else None
+        response = ThinkingLoopDetector.from_settings() if settings.loop_detection_enabled else None
         runaway = (
             RunawayReasoningDetector.from_settings() if settings.runaway_reasoning_enabled else None
         )
@@ -217,23 +220,27 @@ class StreamingPipeline:
 
             if delta_reasoning:
                 outcome.reasoning += delta_reasoning
-                thinking.note(reasoning=delta_reasoning)
+                if thinking is not None:
+                    thinking.note(reasoning=delta_reasoning)
             if delta_content:
                 outcome.content += delta_content
-                response.note(content=delta_content)
+                if response is not None:
+                    response.note(content=delta_content)
 
             # Check the watchdogs in the same order as before: reasoning loop,
             # response loop, then runaway reasoning.
-            verdict = thinking.check()
-            if verdict is not None:
-                outcome.verdict = verdict
-                outcome.verdict_stream = "thinking"
-                return
-            verdict = response.check()
-            if verdict is not None:
-                outcome.verdict = verdict
-                outcome.verdict_stream = "response"
-                return
+            if thinking is not None:
+                verdict = thinking.check()
+                if verdict is not None:
+                    outcome.verdict = verdict
+                    outcome.verdict_stream = "thinking"
+                    return
+            if response is not None:
+                verdict = response.check()
+                if verdict is not None:
+                    outcome.verdict = verdict
+                    outcome.verdict_stream = "response"
+                    return
             if runaway is not None:
                 verdict = runaway.check()
                 if verdict is not None:
@@ -243,14 +250,14 @@ class StreamingPipeline:
 
         # End of stream: run the trailing-text check, then the terminal
         # ``finish_reason == "length"`` classification.
-        if outcome.verdict is None:
+        if outcome.verdict is None and response is not None:
             outcome.verdict = response.check()
             if outcome.verdict is not None:
                 outcome.verdict_stream = "response"
-            else:
-                outcome.verdict = thinking.check()
-                if outcome.verdict is not None:
-                    outcome.verdict_stream = "thinking"
+        if outcome.verdict is None and thinking is not None:
+            outcome.verdict = thinking.check()
+            if outcome.verdict is not None:
+                outcome.verdict_stream = "thinking"
         if outcome.verdict is None:
             self._classify_length(outcome)
 
@@ -287,7 +294,7 @@ class StreamingPipeline:
                 },
             )
             outcome.verdict_stream = "reasoning"
-        else:
+        elif settings.loop_detection_enabled:
             outcome.verdict = StreamVerdict(
                 kind="loop",
                 reason=("output window exhausted (finish_reason=length)"),

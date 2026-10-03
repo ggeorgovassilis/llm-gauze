@@ -20,9 +20,10 @@ from app.remediation.think import ThinkContentGuard
 from mock_upstream import MockUpstream, chunk, settings_override
 
 _PLACEHOLDER = "THE PLACEHOLDER"
+_DEFAULT_TAGS = ("think", "thinking", "reasoning")
 
 
-def _guard(tags=None, placeholder=_PLACEHOLDER):
+def _guard(tags=_DEFAULT_TAGS, placeholder=_PLACEHOLDER):
     return ThinkContentGuard(tags=tags, placeholder=placeholder)
 
 

@@ -38,15 +38,9 @@ class ThinkContentGuard(Transform):
     of change records for the recorder.
     """
 
-    def __init__(
-        self,
-        tags: tuple[str, ...] | None = None,
-        placeholder: str | None = None,
-    ) -> None:
-        self.tags = tuple(t.lower() for t in (tags or _DEFAULT_TAGS))
-        self.placeholder = (
-            placeholder if placeholder is not None else settings.think_empty_response_placeholder
-        )
+    def __init__(self, tags: tuple[str, ...], placeholder: str) -> None:
+        self.tags = tuple(t.lower() for t in tags)
+        self.placeholder = placeholder
 
     @classmethod
     def from_settings(cls) -> "ThinkContentGuard":

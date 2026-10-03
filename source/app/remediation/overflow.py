@@ -34,15 +34,10 @@ class MessageOverflowGuard(Transform):
     threshold, the original dict is returned unchanged.
     """
 
-    def __init__(
-        self,
-        threshold: int | None = None,
-        truncate: bool | None = None,
-        warning: str | None = None,
-    ) -> None:
-        self.threshold = threshold if threshold is not None else settings.message_overflow_threshold
-        self.truncate = truncate if truncate is not None else settings.message_overflow_truncate
-        self.warning = warning if warning is not None else settings.message_overflow_warning
+    def __init__(self, threshold: int, truncate: bool, warning: str) -> None:
+        self.threshold = threshold
+        self.truncate = truncate
+        self.warning = warning
 
     @classmethod
     def from_settings(cls) -> "MessageOverflowGuard":

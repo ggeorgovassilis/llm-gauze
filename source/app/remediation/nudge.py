@@ -24,15 +24,9 @@ class NudgePolicy(Remediation):
 
     name = "nudge"
 
-    def __init__(
-        self,
-        text: str | None = None,
-        max_attempts: int | None = None,
-    ) -> None:
-        self.text = text if text is not None else settings.think_nudge_text
-        self.max_attempts = (
-            max_attempts if max_attempts is not None else settings.think_nudge_max_attempts
-        )
+    def __init__(self, text: str, max_attempts: int) -> None:
+        self.text = text
+        self.max_attempts = max_attempts
 
     @classmethod
     def from_settings(cls) -> "NudgePolicy":

@@ -34,9 +34,13 @@ _chunk = chunk
 
 
 def test_policies_implement_remediation_protocol():
-    for cls in (NudgePolicy, CoastPolicy, RunawayReasoningPolicy, LoopRetryPolicy):
+    for cls, inst in (
+        (NudgePolicy, NudgePolicy.from_settings()),
+        (CoastPolicy, CoastPolicy.from_settings()),
+        (RunawayReasoningPolicy, RunawayReasoningPolicy.from_settings()),
+        (LoopRetryPolicy, LoopRetryPolicy.from_settings()),
+    ):
         assert issubclass(cls, Remediation), cls
-        inst = cls()
         assert isinstance(inst.name, str) and inst.name, cls
         assert isinstance(inst.max_attempts, int) and inst.max_attempts >= 1, cls
         assert callable(inst.applies), cls
@@ -44,17 +48,21 @@ def test_policies_implement_remediation_protocol():
 
 
 def test_transforms_implement_transform_protocol():
-    for cls in (ThinkContentGuard, ToolCallGuard, MessageOverflowGuard):
+    for cls, inst in (
+        (ThinkContentGuard, ThinkContentGuard.from_settings()),
+        (ToolCallGuard, ToolCallGuard.from_settings()),
+        (MessageOverflowGuard, MessageOverflowGuard.from_settings()),
+    ):
         assert issubclass(cls, Transform), cls
-        assert callable(cls().apply), cls
+        assert callable(inst.apply), cls
 
 
 def test_remediation_names_are_stable():
     # The recorder keys and attempt counters hang off these names.
-    assert NudgePolicy().name == "nudge"
-    assert CoastPolicy().name == "coast"
-    assert RunawayReasoningPolicy().name == "runaway"
-    assert LoopRetryPolicy().name == "loop_retry"
+    assert NudgePolicy.from_settings().name == "nudge"
+    assert CoastPolicy.from_settings().name == "coast"
+    assert RunawayReasoningPolicy.from_settings().name == "runaway"
+    assert LoopRetryPolicy.from_settings().name == "loop_retry"
 
 
 # --- ladder composition (helpers) -------------------------------------
@@ -105,7 +113,10 @@ def test_first_applicable_step_skips_exhausted_rung():
 
 
 def test_find_step_returns_rung_by_name():
-    ladder = [NudgePolicy(text=_NUDGE), CoastPolicy(text=_COAST_TEXT)]
+    ladder = [
+        NudgePolicy(text=_NUDGE, max_attempts=2),
+        CoastPolicy(text=_COAST_TEXT, max_attempts=2),
+    ]
     assert _find_step(ladder, "coast") is not None
     assert _find_step(ladder, "loop_retry") is None
 

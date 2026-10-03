@@ -28,37 +28,30 @@ class LoopRetryPolicy(Remediation):
 
     def __init__(
         self,
-        max_attempts: int | None = None,
-        increment: float | None = None,
-        temperature: float | None = None,
-        repeat_penalty: float | None = None,
-        presence_penalty: float | None = None,
-        frequency_penalty: float | None = None,
+        max_attempts: int,
+        increment: float,
+        temperature: float,
+        repeat_penalty: float,
+        presence_penalty: float,
+        frequency_penalty: float,
     ) -> None:
-        self.max_attempts = (
-            max_attempts if max_attempts is not None else settings.loop_retry_max_attempts
-        )
-        self.increment = increment if increment is not None else settings.loop_retry_increment
-        self.temperature = (
-            temperature if temperature is not None else settings.loop_retry_temperature
-        )
-        self.repeat_penalty = (
-            repeat_penalty if repeat_penalty is not None else settings.loop_retry_repeat_penalty
-        )
-        self.presence_penalty = (
-            presence_penalty
-            if presence_penalty is not None
-            else settings.loop_retry_presence_penalty
-        )
-        self.frequency_penalty = (
-            frequency_penalty
-            if frequency_penalty is not None
-            else settings.loop_retry_frequency_penalty
-        )
+        self.max_attempts = max_attempts
+        self.increment = increment
+        self.temperature = temperature
+        self.repeat_penalty = repeat_penalty
+        self.presence_penalty = presence_penalty
+        self.frequency_penalty = frequency_penalty
 
     @classmethod
     def from_settings(cls) -> "LoopRetryPolicy":
-        return cls()
+        return cls(
+            settings.loop_retry_max_attempts,
+            settings.loop_retry_increment,
+            settings.loop_retry_temperature,
+            settings.loop_retry_repeat_penalty,
+            settings.loop_retry_presence_penalty,
+            settings.loop_retry_frequency_penalty,
+        )
 
     def applies(self, turn: Turn, request_body: dict) -> bool:
         """The ladder's trigger: a ``loop`` verdict (not a stall)."""

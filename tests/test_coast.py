@@ -94,7 +94,7 @@ def _loop_request():
 def test_should_nudge_coasted_turn():
     req = _loop_request()
     assert (
-        CoastPolicy(text=_COAST_TEXT).should_nudge(
+        CoastPolicy(text=_COAST_TEXT, max_attempts=2).should_nudge(
             "stop",
             _COASTED_CONTENT,
             None,
@@ -110,7 +110,7 @@ def test_should_nudge_ignores_real_tool_call():
     req = _loop_request()
     tool_calls = [{"id": "c", "function": {"name": "next_chunk", "arguments": "{}"}}]
     assert (
-        CoastPolicy(text=_COAST_TEXT).should_nudge(
+        CoastPolicy(text=_COAST_TEXT, max_attempts=2).should_nudge(
             "stop", "", tool_calls, "", req["tools"], req["messages"]
         )
         is False
@@ -120,7 +120,7 @@ def test_should_nudge_ignores_real_tool_call():
 def test_should_nudge_requires_non_empty_content():
     req = _loop_request()
     assert (
-        CoastPolicy(text=_COAST_TEXT).should_nudge(
+        CoastPolicy(text=_COAST_TEXT, max_attempts=2).should_nudge(
             "stop", "   ", None, "   ", req["tools"], req["messages"]
         )
         is False
@@ -130,7 +130,7 @@ def test_should_nudge_requires_non_empty_content():
 def test_should_nudge_requires_reasoning_match():
     req = _loop_request()
     assert (
-        CoastPolicy(text=_COAST_TEXT).should_nudge(
+        CoastPolicy(text=_COAST_TEXT, max_attempts=2).should_nudge(
             "stop",
             _COASTED_CONTENT,
             None,
@@ -145,7 +145,7 @@ def test_should_nudge_requires_reasoning_match():
 def test_should_nudge_requires_tools():
     req = _loop_request()
     assert (
-        CoastPolicy(text=_COAST_TEXT).should_nudge(
+        CoastPolicy(text=_COAST_TEXT, max_attempts=2).should_nudge(
             "stop",
             _COASTED_CONTENT,
             None,
@@ -160,7 +160,7 @@ def test_should_nudge_requires_tools():
 def test_should_nudge_requires_prior_tool_call():
     req = _loop_request()
     assert (
-        CoastPolicy(text=_COAST_TEXT).should_nudge(
+        CoastPolicy(text=_COAST_TEXT, max_attempts=2).should_nudge(
             "stop",
             _COASTED_CONTENT,
             None,
@@ -175,7 +175,7 @@ def test_should_nudge_requires_prior_tool_call():
 def test_should_nudge_requires_stop_finish_reason():
     req = _loop_request()
     assert (
-        CoastPolicy(text=_COAST_TEXT).should_nudge(
+        CoastPolicy(text=_COAST_TEXT, max_attempts=2).should_nudge(
             "length",
             _COASTED_CONTENT,
             None,
@@ -189,7 +189,7 @@ def test_should_nudge_requires_stop_finish_reason():
 
 def test_apply_replays_coast_turn_and_appends_nudge():
     req = _loop_request()
-    out = CoastPolicy(text=_COAST_TEXT).apply(Turn(content=_COASTED_CONTENT), req)
+    out = CoastPolicy(text=_COAST_TEXT, max_attempts=2).apply(Turn(content=_COASTED_CONTENT), req)
     assert len(out["messages"]) == len(req["messages"]) + 2, out
     assert out["messages"][-2] == {
         "role": "assistant",

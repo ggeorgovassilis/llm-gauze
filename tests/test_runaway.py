@@ -65,31 +65,31 @@ _ANSWER_TURN = [
 
 def test_detector_trips_when_budget_exceeded_without_content():
     detector = RunawayReasoningDetector(token_threshold=10)
-    detector.note_reasoning("a" * 100)  # ~25 tokens
-    assert detector.triggered is True
-    verdict = detector.verdict()
+    detector.note(reasoning="a" * 100)  # ~25 tokens
+    verdict = detector.check()
+    assert verdict is not None
     assert verdict.kind == "runaway_reasoning"
     assert verdict.details["token_threshold"] == 10
 
 
 def test_detector_below_threshold_does_not_trip():
     detector = RunawayReasoningDetector(token_threshold=1000)
-    detector.note_reasoning("a" * 10)
-    assert detector.triggered is False
+    detector.note(reasoning="a" * 10)
+    assert detector.check() is None
 
 
 def test_detector_disarmed_by_content():
     detector = RunawayReasoningDetector(token_threshold=10)
-    detector.note_reasoning("a" * 100)
-    detector.note_content()
-    assert detector.triggered is False
+    detector.note(reasoning="a" * 100)
+    detector.note(content="x")
+    assert detector.check() is None
 
 
 def test_detector_tool_call_counts_as_content():
     detector = RunawayReasoningDetector(token_threshold=10)
-    detector.note_reasoning("a" * 100)
-    detector.note_content()  # stands in for a tool-call fragment
-    assert detector.triggered is False
+    detector.note(reasoning="a" * 100)
+    detector.note(tool_calls=[{"index": 0}])  # stands in for a tool-call fragment
+    assert detector.check() is None
 
 
 def test_policy_appends_nudge_without_mutation():

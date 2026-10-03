@@ -109,9 +109,10 @@ def test_repetitive_loop():
     detector = _make()
     verdict = None
     for _ in range(80):
-        verdict = detector.feed("the cat sat on the mat. ") or verdict
+        detector.note(content="the cat sat on the mat. ")
+        verdict = detector.check() or verdict
     if verdict is None:
-        verdict = detector.flush()
+        verdict = detector.check()
     assert verdict is not None, "expected a loop, none detected"
     assert verdict.kind == "loop", verdict
     assert "entropy" in verdict.reason, verdict
@@ -124,9 +125,10 @@ def test_diverse_output_no_loop():
     i = 0
     while i < len(text):
         step = (i * 7 + 11) % 40 + 1
-        assert detector.feed(text[i : i + step]) is None
+        detector.note(content=text[i : i + step])
+        assert detector.check() is None
         i += step
-    assert detector.flush() is None
+    assert detector.check() is None
 
 
 def test_short_output_below_gate_is_never_a_loop():
@@ -135,21 +137,24 @@ def test_short_output_below_gate_is_never_a_loop():
     detector = _make(window_bytes=10000, min_output_fraction=0.5)
     # ~4000 bytes, under the 5000-byte gate.
     for _ in range(100):
-        assert detector.feed("done — nothing left to vet in this chunk\n") is None
-    assert detector.flush() is None
+        detector.note(content="done — nothing left to vet in this chunk\n")
+        assert detector.check() is None
+    assert detector.check() is None
 
 
 def test_arming_gate():
     detector = _make(window_bytes=2000, min_output_fraction=0.5)
     # 400 chars < 1000-byte gate -> not armed yet, repetitive or not.
     for _ in range(10):
-        assert detector.feed("the cat sat on the mat. ") is None
+        detector.note(content="the cat sat on the mat. ")
+        assert detector.check() is None
     # Cross the gate with more repetition -> now armed and detected.
     verdict = None
     for _ in range(60):
-        verdict = detector.feed("the cat sat on the mat. ") or verdict
+        detector.note(content="the cat sat on the mat. ")
+        verdict = detector.check() or verdict
     if verdict is None:
-        verdict = detector.flush()
+        verdict = detector.check()
     assert verdict is not None and verdict.kind == "loop", verdict
 
 
@@ -174,20 +179,23 @@ def test_enumeration_of_tool_results_does_not_loop():
         "12. done — nothing left to vet in this chunk",
     ]
     for line in lines:
-        assert detector.feed(line + "\n") is None
-    assert detector.flush() is None
+        detector.note(content=line + "\n")
+        assert detector.check() is None
+    assert detector.check() is None
 
 
 def test_reset_clears_state():
     detector = _make(window_bytes=500, min_output_fraction=0.5)
     verdict = None
     for _ in range(30):
-        verdict = detector.feed("the cat sat on the mat. ") or verdict
+        detector.note(content="the cat sat on the mat. ")
+        verdict = detector.check() or verdict
     assert verdict is not None and verdict.kind == "loop"
 
     detector.reset()
     # After reset the buffer is empty, so the detector is disarmed again.
-    assert detector.feed("the cat sat on the mat. ") is None
+    detector.note(content="the cat sat on the mat. ")
+    assert detector.check() is None
 
 
 def test_compression_ratio_orders_repetition():
@@ -200,9 +208,10 @@ def test_compression_ratio_orders_repetition():
     assert detector._compression_ratio(repetitive) < detector._compression_ratio(novel)
 
 
-def test_feed_empty_string_is_noop():
+def test_note_empty_string_is_noop():
     detector = _make()
-    assert detector.feed("") is None
+    detector.note(content="")
+    assert detector.check() is None
 
 
 def test_compression_ratio_of_empty_text_is_one():

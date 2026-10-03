@@ -19,15 +19,16 @@ Key design points:
 import time
 
 from app.config import settings
-from app.remediation.base import StreamVerdict
+from app.remediation.base import ContentWatchdog, StreamVerdict
 
 
-class StallDetector:
+class StallDetector(ContentWatchdog):
     """Watchdog that flags a stream that has stopped producing content tokens.
 
     Unlike :class:`ThinkingLoopDetector`, this observes *time* rather than
-    *text*, so it must be driven by the streaming loop (call :meth:`note_token`
-    on each content-bearing token and poll :meth:`remaining` between reads).
+    *text*. It implements the uniform :class:`ContentWatchdog` contract: the
+    pipeline calls :meth:`note` on each content-bearing token and polls
+    :meth:`remaining` between reads to bound each read by the stall budget.
     """
 
     def __init__(
@@ -51,10 +52,23 @@ class StallDetector:
             gap_seconds=settings.stall_gap_seconds,
         )
 
-    def note_token(self) -> None:
-        """Record arrival of a content-bearing token (resets the gap timer)."""
-        self._last_token = self._clock()
-        self.saw_first_token = True
+    def note(
+        self,
+        *,
+        reasoning: str | None = None,
+        content: str | None = None,
+        tool_calls: list | None = None,
+    ) -> None:
+        """Record arrival of a content-bearing event (resets the gap timer)."""
+        if reasoning or content or tool_calls:
+            self._last_token = self._clock()
+            self.saw_first_token = True
+
+    def check(self) -> StreamVerdict | None:
+        """Return the stall verdict iff the deadline has passed."""
+        if self._clock() >= self.deadline():
+            return self.verdict()
+        return None
 
     def deadline(self) -> float:
         """Absolute monotonic time after which this stream is declared stalled."""
@@ -66,9 +80,11 @@ class StallDetector:
         """Seconds left before this stream is declared stalled (may be <= 0)."""
         return self.deadline() - self._clock()
 
-    @property
-    def stalled(self) -> bool:
-        return self._clock() >= self.deadline()
+    def reset(self) -> None:
+        """Clear state so the watchdog can be reused for a new stream."""
+        self._started = self._clock()
+        self._last_token = self._started
+        self.saw_first_token = False
 
     def verdict(self) -> StreamVerdict:
         """Build the abort verdict for a stalled stream."""

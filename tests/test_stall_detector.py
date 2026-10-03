@@ -43,10 +43,10 @@ def _make(ttft_seconds=120.0, gap_seconds=60.0, start=0.0):
 def test_stall_before_first_token():
     detector, clock = _make(ttft_seconds=10.0, gap_seconds=5.0)
     clock.advance(9.9)
-    assert not detector.stalled
+    assert detector.check() is None
     clock.advance(0.2)  # 10.1s — past the TTFT budget
-    assert detector.stalled
-    verdict = detector.verdict()
+    verdict = detector.check()
+    assert verdict is not None
     assert verdict.kind == "stalled", verdict
     assert "first token" in verdict.reason, verdict
     assert verdict.details["saw_first_token"] is False
@@ -55,23 +55,23 @@ def test_stall_before_first_token():
 def test_no_stall_when_first_token_arrives_in_time():
     detector, clock = _make(ttft_seconds=10.0, gap_seconds=5.0)
     clock.advance(8.0)
-    detector.note_token()
+    detector.note(content="x")
     # Once a token lands, the (tighter) gap timer governs, not TTFT.
     clock.advance(4.9)
-    assert not detector.stalled
+    assert detector.check() is None
     clock.advance(0.2)  # 5.1s after the last token
-    assert detector.stalled
+    assert detector.check() is not None
 
 
 def test_gap_timer_resets_on_each_token():
     detector, clock = _make(ttft_seconds=10.0, gap_seconds=5.0)
-    detector.note_token()
+    detector.note(content="x")
     clock.advance(4.0)
-    detector.note_token()  # resets the gap timer
+    detector.note(content="x")  # resets the gap timer
     clock.advance(4.0)
-    assert not detector.stalled
+    assert detector.check() is None
     clock.advance(1.1)  # 5.1s since the last token
-    assert detector.stalled
+    assert detector.check() is not None
 
 
 def test_remaining_decreases_then_goes_non_positive():
@@ -85,9 +85,10 @@ def test_remaining_decreases_then_goes_non_positive():
 
 def test_verdict_after_first_token_mentions_gap():
     detector, clock = _make(ttft_seconds=10.0, gap_seconds=5.0)
-    detector.note_token()
+    detector.note(content="x")
     clock.advance(5.0)
-    verdict = detector.verdict()
+    verdict = detector.check()
+    assert verdict is not None
     assert verdict.kind == "stalled", verdict
     assert "content-bearing token" in verdict.reason, verdict
     assert verdict.details["saw_first_token"] is True

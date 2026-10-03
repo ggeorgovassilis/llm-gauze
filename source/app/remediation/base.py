@@ -82,23 +82,58 @@ class StreamVerdict:
     details: dict = field(default_factory=dict)
 
 
-class StreamDetector(ABC):
-    """Understanding layer for content streams (thinking or response).
+class ContentWatchdog(ABC):
+    """Understanding layer for a content stream — the uniform watchdog contract.
 
-    Sibling of ``Detector``: where ``Detector`` classifies transport/status
-    failures, a ``StreamDetector`` observes the generated text itself (loops,
-    drift, context overflow, ...). Stateful by design — one instance per
-    (request, stream), never shared across requests.
+    A *content watchdog* observes the generated text of a single streamed turn
+    (reasoning, visible content, and tool-call fragments) and raises a
+    :class:`StreamVerdict` the moment it detects a problem — a loop, a silent
+    stall, or endless reasoning. Sibling of ``Detector``: where ``Detector``
+    classifies transport/status failures, a ``ContentWatchdog`` observes the
+    generated text itself.
+
+    All three watchdogs (:class:`ThinkingLoopDetector`, :class:`StallDetector`,
+    :class:`RunawayReasoningDetector`) implement this one interface, so the
+    streaming pipeline drives them uniformly and a new watchdog is
+    "implement and register", not "edit the loop".
+
+    Stateful by design — one instance per (request, stream), never shared
+    across requests.
     """
 
     @abstractmethod
-    def feed(self, text: str) -> StreamVerdict | None:
-        """Feed a chunk of generated text; return a verdict iff detected."""
+    def note(
+        self,
+        *,
+        reasoning: str | None = None,
+        content: str | None = None,
+        tool_calls: list | None = None,
+    ) -> None:
+        """Feed one content-bearing event (any combination of the three).
+
+        Called by the pipeline once per SSE delta that carries model output. A
+        text-based watchdog accumulates the text here; a time-based watchdog
+        resets its timer on any content-bearing event; a token-count watchdog
+        tallies its budget and notes whether visible content/tool-calls have
+        appeared.
+        """
 
     @abstractmethod
-    def flush(self) -> StreamVerdict | None:
-        """Process any trailing partial text at end of stream."""
+    def check(self) -> StreamVerdict | None:
+        """Return a verdict iff the watchdog has tripped, else ``None``.
+
+        Called by the pipeline after each ``note`` and again at end of stream.
+        """
+
+    @abstractmethod
+    def remaining(self) -> float | None:
+        """Seconds until this watchdog trips if no token arrives, else ``None``.
+
+        A time-based watchdog (stall) returns its remaining budget so the
+        pipeline can bound each read; text/count-based watchdogs return
+        ``None`` (they trip inside ``note``/``check``, not on a timer).
+        """
 
     @abstractmethod
     def reset(self) -> None:
-        """Clear all accumulated state."""
+        """Clear all accumulated state so the watchdog can be reused."""

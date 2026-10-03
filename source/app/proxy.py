@@ -568,7 +568,7 @@ class Proxy:
         thinking (reasoning) stream, one over the visible response.
 
         Remediation is an *ordered, composable ladder* of :class:`Remediation`
-        steps (loop retry, runaway nudge, empty-turn nudge, coast re-prompt),
+        steps (runaway nudge, loop retry, empty-turn nudge, coast re-prompt),
         each with its own trigger and attempt budget. After each exchange the
         ladder is walked in order and the first rung whose trigger fires
         re-submits; when no rung fires the outcome is final (abort on a

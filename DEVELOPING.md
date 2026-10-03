@@ -6,8 +6,6 @@ This is the developer guide for llm-gauze. Public users should follow the
 ## Prerequisites
 
 - Docker and Docker Compose.
-- The `gh` CLI is not required, but the project workflow (issues and pull
-  requests) uses it.
 
 ## Setup
 

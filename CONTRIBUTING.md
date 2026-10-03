@@ -59,7 +59,6 @@ Every change starts from a ticket and is reviewed before it lands:
 
 ## Commit conventions
 
-- UK English throughout.
 - Concise imperative subject line, referencing the ticket: `Add …`, `Fix …`,
   `Remove …`.
 - Keep each commit to one logical change; split unrelated work into separate

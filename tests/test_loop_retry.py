@@ -35,7 +35,14 @@ def test_apply_sets_fallback_when_client_omits():
 
 def test_apply_bumps_client_submitted_values():
     """A parameter the client submitted is increased by the increment."""
-    policy = LoopRetryPolicy(increment=0.1)
+    policy = LoopRetryPolicy(
+        max_attempts=2,
+        increment=0.1,
+        temperature=1.2,
+        repeat_penalty=1.2,
+        presence_penalty=0.3,
+        frequency_penalty=0.3,
+    )
     body = {
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}],
@@ -52,7 +59,14 @@ def test_apply_bumps_client_submitted_values():
 
 
 def test_apply_does_not_mutate_input():
-    policy = LoopRetryPolicy()
+    policy = LoopRetryPolicy(
+        max_attempts=2,
+        increment=0.1,
+        temperature=1.2,
+        repeat_penalty=1.2,
+        presence_penalty=0.3,
+        frequency_penalty=0.3,
+    )
     body = {
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}],
@@ -65,7 +79,14 @@ def test_apply_does_not_mutate_input():
 
 def test_apply_mixed_fallback_and_bump():
     """Submitting some parameters bumps them; the rest fall back."""
-    policy = LoopRetryPolicy(increment=0.1, temperature=1.2, repeat_penalty=1.2)
+    policy = LoopRetryPolicy(
+        max_attempts=2,
+        increment=0.1,
+        temperature=1.2,
+        repeat_penalty=1.2,
+        presence_penalty=0.3,
+        frequency_penalty=0.3,
+    )
     body = {
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}],

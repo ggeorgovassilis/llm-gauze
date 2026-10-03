@@ -45,29 +45,40 @@ _ANSWER_TURN = [
 
 
 def test_should_nudge_empty_turn():
-    assert NudgePolicy(text=_NUDGE).should_nudge("stop", "", None, "thinking") is True
+    assert (
+        NudgePolicy(text=_NUDGE, max_attempts=2).should_nudge("stop", "", None, "thinking") is True
+    )
 
 
 def test_should_nudge_ignores_tool_calls():
     tool_calls = [{"id": "c", "function": {"name": "f", "arguments": "{}"}}]
-    assert NudgePolicy(text=_NUDGE).should_nudge("stop", "", tool_calls, "thinking") is False
+    assert (
+        NudgePolicy(text=_NUDGE, max_attempts=2).should_nudge("stop", "", tool_calls, "thinking")
+        is False
+    )
 
 
 def test_should_nudge_ignores_visible_content():
-    assert NudgePolicy(text=_NUDGE).should_nudge("stop", "hello", None, "thinking") is False
+    assert (
+        NudgePolicy(text=_NUDGE, max_attempts=2).should_nudge("stop", "hello", None, "thinking")
+        is False
+    )
 
 
 def test_should_nudge_requires_stop_finish_reason():
-    assert NudgePolicy(text=_NUDGE).should_nudge("length", "", None, "thinking") is False
+    assert (
+        NudgePolicy(text=_NUDGE, max_attempts=2).should_nudge("length", "", None, "thinking")
+        is False
+    )
 
 
 def test_should_nudge_requires_reasoning():
-    assert NudgePolicy(text=_NUDGE).should_nudge("stop", "", None, "") is False
+    assert NudgePolicy(text=_NUDGE, max_attempts=2).should_nudge("stop", "", None, "") is False
 
 
 def test_apply_appends_nudge_message():
     body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
-    out = NudgePolicy(text=_NUDGE).apply(Turn(), body)
+    out = NudgePolicy(text=_NUDGE, max_attempts=2).apply(Turn(), body)
     assert len(out["messages"]) == 2, out
     assert out["messages"][-1] == {"role": "user", "content": _NUDGE}, out
     assert out["messages"][0] == {"role": "user", "content": "hi"}, out
@@ -75,7 +86,7 @@ def test_apply_appends_nudge_message():
 
 def test_apply_does_not_mutate_input():
     body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
-    NudgePolicy(text=_NUDGE).apply(Turn(), body)
+    NudgePolicy(text=_NUDGE, max_attempts=2).apply(Turn(), body)
     assert len(body["messages"]) == 1, body
 
 

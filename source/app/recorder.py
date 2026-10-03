@@ -9,7 +9,6 @@ import asyncio
 import datetime
 import json
 import logging
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -29,7 +28,9 @@ class Recorder:
         self.path = Path(record_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._rotate_existing()
-        self._lock = threading.Lock()
+        # Serialises the appends so concurrent records still land in call
+        # order (asyncio.Lock is FIFO-fair across waiters).
+        self._write_lock = asyncio.Lock()
 
     def _rotate_existing(self) -> None:
         """Move a pre-existing record file aside, appending a timestamp."""
@@ -52,13 +53,16 @@ class Recorder:
         set by the caller (method, path, bodies, status, error, ...).
 
         The blocking file write runs in a worker thread (``asyncio.to_thread``)
-        so it never stalls the event loop; the ``threading.Lock`` keeps the
-        append atomic across concurrent records.
+        so it never stalls the event loop. The ``asyncio.Lock`` serialises the
+        writes, so records are appended to the JSONL file in the order
+        ``record`` was called, preserving chronological order under
+        concurrency.
         """
         entry.setdefault("id", uuid.uuid4().hex)
         entry.setdefault("timestamp", time.time())
         line = json.dumps(entry, ensure_ascii=False, default=str)
-        await asyncio.to_thread(self._append, line)
+        async with self._write_lock:
+            await asyncio.to_thread(self._append, line)
 
         logger.info(
             "recorded exchange %s %s %s",
@@ -68,7 +72,10 @@ class Recorder:
         )
 
     def _append(self, line: str) -> None:
-        """Append one serialised record to the JSONL file (worker thread)."""
-        with self._lock:
-            with self.path.open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
+        """Append one serialised record to the JSONL file (worker thread).
+
+        Callers serialise through ``self._write_lock``, so this is only ever
+        run one write at a time.
+        """
+        with self.path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")

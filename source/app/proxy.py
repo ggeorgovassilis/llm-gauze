@@ -455,7 +455,10 @@ class Proxy:
         """
         policy = self.retry_policy
         if diagnosis is not None and diagnosis.code == DiagnosisCode.CONTEXT_WINDOW_EXCEEDED:
-            telemetry.incr("requests_total", {"outcome": "context_window_exceeded"})
+            telemetry.incr(
+                "requests_total",
+                {"outcome": DiagnosisCode.CONTEXT_WINDOW_EXCEEDED.value},
+            )
             telemetry.incr("context_window_aborts_total")
             return "context_window"
         if policy.should_retry(diagnosis, attempt):

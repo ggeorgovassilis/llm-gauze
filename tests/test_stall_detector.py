@@ -8,12 +8,14 @@ Runs with plain Python (stdlib only) inside the container:
 import traceback
 
 try:
+    from app.remediation.base import VerdictKind
     from app.remediation.stall import StallDetector
 except ImportError:  # pragma: no cover - run on host without the container
     import sys
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "source"))
+    from app.remediation.base import VerdictKind
     from app.remediation.stall import StallDetector
 
 
@@ -47,7 +49,7 @@ def test_stall_before_first_token():
     clock.advance(0.2)  # 10.1s — past the TTFT budget
     verdict = detector.check()
     assert verdict is not None
-    assert verdict.kind == "stalled", verdict
+    assert verdict.kind == VerdictKind.STALLED, verdict
     assert "first token" in verdict.reason, verdict
     assert verdict.details["saw_first_token"] is False
 
@@ -89,7 +91,7 @@ def test_verdict_after_first_token_mentions_gap():
     clock.advance(5.0)
     verdict = detector.check()
     assert verdict is not None
-    assert verdict.kind == "stalled", verdict
+    assert verdict.kind == VerdictKind.STALLED, verdict
     assert "content-bearing token" in verdict.reason, verdict
     assert verdict.details["saw_first_token"] is True
     assert verdict.details["elapsed_seconds"] == 5.0

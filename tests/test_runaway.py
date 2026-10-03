@@ -19,7 +19,7 @@ import traceback
 
 from app.proxy import Proxy
 from app.recorder import Recorder
-from app.remediation.base import Turn
+from app.remediation.base import Turn, VerdictKind
 from app.remediation.runaway import (
     RunawayReasoningDetector,
     RunawayReasoningPolicy,
@@ -69,7 +69,7 @@ def test_detector_trips_when_budget_exceeded_without_content():
     detector.note(reasoning="a" * 100)  # ~25 tokens
     verdict = detector.check()
     assert verdict is not None
-    assert verdict.kind == "runaway_reasoning"
+    assert verdict.kind == VerdictKind.RUNAWAY_REASONING
     assert verdict.details["token_threshold"] == 10
 
 

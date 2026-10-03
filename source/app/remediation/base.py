@@ -50,7 +50,7 @@ class Diagnosis:
     # Optional machine-readable code (e.g. ``DiagnosisCode.CONTEXT_WINDOW_EXCEEDED``)
     # that lets the proxy route a verdict to a bespoke response instead of the
     # generic pass-through/502 path. ``None`` for plain retry/status verdicts.
-    code: str | None = None
+    code: DiagnosisCode | None = None
 
     def __str__(self) -> str:
         return self.reason

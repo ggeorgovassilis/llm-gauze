@@ -8,14 +8,11 @@ upstream: a reasoning-only turn that exhausts the window is re-submitted with a
 stop-thinking nudge and, on a healthy retry, surfaces the answer; an
 unrepentant model is aborted after the budget; a content-producing turn is never
 flagged; and the disabled switch leaves the terminal turn as a plain loop.
-
-    docker compose exec -T gateway python - < tests/test_runaway.py
 """
 
 import asyncio
 import json
 import random
-import traceback
 
 from app.proxy import Proxy
 from app.recorder import Recorder
@@ -189,28 +186,3 @@ def test_disabled_terminal_turn_is_plain_loop():
     assert data["error"]["type"] == "loop_detected", data
     assert count == 1, count
     assert not any(r.get("runaway") for r in records), records
-
-
-def _run_all() -> int:
-    tests = [
-        value
-        for key, value in sorted(globals().items())
-        if key.startswith("test_") and callable(value)
-    ]
-    failed = 0
-    for test in tests:
-        try:
-            test()
-            print(f"PASS {test.__name__}")
-        except Exception:  # noqa: BLE001 - report and continue
-            failed += 1
-            print(f"FAIL {test.__name__}")
-            traceback.print_exc()
-    print(f"\n{len(tests) - failed}/{len(tests)} passed")
-    return failed
-
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(1 if _run_all() else 0)

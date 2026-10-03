@@ -2,14 +2,11 @@
 
 Spins up a mock SSE upstream inside the process and drives the real
 ``Proxy._forward_streaming`` against it, verifying both the loop-abort and the
-non-loop reconstruction paths. Runs in the container:
-
-    docker compose exec -T gateway python - < tests/test_loop_integration.py
+non-loop reconstruction paths.
 """
 
 import asyncio
 import json
-import traceback
 
 from app.config import settings
 from app.proxy import Proxy
@@ -365,28 +362,3 @@ def test_streaming_passthrough():
     assert "data:" in text, text
     assert "[DONE]" in text, text
     assert "chat.completion.chunk" in text, text
-
-
-def _run_all() -> int:
-    tests = [
-        value
-        for key, value in sorted(globals().items())
-        if key.startswith("test_") and callable(value)
-    ]
-    failed = 0
-    for test in tests:
-        try:
-            test()
-            print(f"PASS {test.__name__}")
-        except Exception:  # noqa: BLE001 - report and continue
-            failed += 1
-            print(f"FAIL {test.__name__}")
-            traceback.print_exc()
-    print(f"\n{len(tests) - failed}/{len(tests)} passed")
-    return failed
-
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(1 if _run_all() else 0)

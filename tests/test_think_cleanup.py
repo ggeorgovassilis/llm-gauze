@@ -6,13 +6,10 @@ Integration tests drive the real `Proxy._forward_streaming` against a mock SSE
 upstream that leaks a `<think>` block, proving both the non-streaming
 (reconstructed) and streaming (SSE) client shapes return non-empty cleaned
 content and preserve the relocated reasoning.
-
-    docker compose exec -T gateway python - < tests/test_think_cleanup.py
 """
 
 import asyncio
 import json
-import traceback
 
 from app.proxy import Proxy
 from app.recorder import Recorder
@@ -268,28 +265,3 @@ def test_reconstructed_tool_call_turn_no_placeholder():
     assert "content" not in message, message
     assert message["reasoning_content"] == "which tool?", message
     assert message["tool_calls"][0]["function"]["arguments"] == '{"city":"Paris"}', message
-
-
-def _run_all() -> int:
-    tests = [
-        value
-        for key, value in sorted(globals().items())
-        if key.startswith("test_") and callable(value)
-    ]
-    failed = 0
-    for test in tests:
-        try:
-            test()
-            print(f"PASS {test.__name__}")
-        except Exception:  # noqa: BLE001 - report and continue
-            failed += 1
-            print(f"FAIL {test.__name__}")
-            traceback.print_exc()
-    print(f"\n{len(tests) - failed}/{len(tests)} passed")
-    return failed
-
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(1 if _run_all() else 0)

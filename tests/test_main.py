@@ -6,8 +6,12 @@ live upstream. ``main.py`` was at 0% coverage before these tests (test audit #39
 finding F1).
 """
 
+import asyncio
+
 from app.config import settings
 from app.main import app
+from app.proxy import Proxy
+from app.recorder import Recorder
 from fastapi.testclient import TestClient
 
 
@@ -49,3 +53,29 @@ def test_metrics_returns_prometheus_by_default():
         # The histogram's +Inf bucket and the gauge are always present.
         assert 'upstream_latency_seconds_bucket{le="+Inf"}' in text
         assert "upstream_down " in text
+
+
+def test_lifespan_closes_upstream_client(monkeypatch):
+    # The lifespan must call ``Proxy.aclose()`` on shutdown so the
+    # ``httpx.AsyncClient`` pool is drained rather than abandoned at process
+    # exit (#93). Guards against a regression that silently drops the hook.
+    from app import main
+
+    closed = False
+
+    async def spy_aclose():
+        nonlocal closed
+        closed = True
+
+    monkeypatch.setattr(main.proxy, "aclose", spy_aclose)
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+        assert closed is False
+    assert closed is True
+
+
+def test_proxy_aclose_closes_client(tmp_path):
+    proxy = Proxy(Recorder(tmp_path / "records.jsonl"))
+    assert proxy.client.is_closed is False
+    asyncio.run(proxy.aclose())
+    assert proxy.client.is_closed is True

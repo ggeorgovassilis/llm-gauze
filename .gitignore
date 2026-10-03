@@ -30,3 +30,4 @@ htmlcov/
 .idea/
 .vscode/
 .github/copilot-instructions.md
+.github/reviewer.agent.md

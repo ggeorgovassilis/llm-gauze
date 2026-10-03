@@ -5,6 +5,7 @@ local LLM provider, recording every exchange along the way.
 """
 
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, Request
@@ -25,7 +26,19 @@ record_path = Path(settings.data_dir) / settings.record_file
 recorder = Recorder(record_path)
 proxy = Proxy(recorder)
 
-app = FastAPI(title="llm-gauze Gateway")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Tear down the upstream client's connection pool on shutdown.
+
+    Without this hook ``proxy.client`` and its pool are abandoned at process
+    exit; ``aclose()`` drains and closes them cleanly.
+    """
+    yield
+    await proxy.aclose()
+
+
+app = FastAPI(title="llm-gauze Gateway", lifespan=lifespan)
 
 router = APIRouter()
 

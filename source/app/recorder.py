@@ -5,6 +5,7 @@ remediation modules will read from. It is deliberately kept simple and
 append-only: each exchange is written as one JSON line to a JSONL file.
 """
 
+import asyncio
 import datetime
 import json
 import logging
@@ -44,18 +45,20 @@ class Recorder:
         self.path.rename(rotated)
         logger.info("rotated existing record file %s -> %s", self.path.name, rotated.name)
 
-    def record(self, entry: dict) -> None:
+    async def record(self, entry: dict) -> None:
         """Persist a single exchange record.
 
         `entry` is a dict of any JSON-serialisable content. Common fields are
         set by the caller (method, path, bodies, status, error, ...).
+
+        The blocking file write runs in a worker thread (``asyncio.to_thread``)
+        so it never stalls the event loop; the ``threading.Lock`` keeps the
+        append atomic across concurrent records.
         """
         entry.setdefault("id", uuid.uuid4().hex)
         entry.setdefault("timestamp", time.time())
         line = json.dumps(entry, ensure_ascii=False, default=str)
-        with self._lock:
-            with self.path.open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
+        await asyncio.to_thread(self._append, line)
 
         logger.info(
             "recorded exchange %s %s %s",
@@ -63,3 +66,9 @@ class Recorder:
             entry.get("method"),
             entry.get("path"),
         )
+
+    def _append(self, line: str) -> None:
+        """Append one serialised record to the JSONL file (worker thread)."""
+        with self._lock:
+            with self.path.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")

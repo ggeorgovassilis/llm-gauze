@@ -442,6 +442,14 @@ class Proxy:
         self.retry_policy = _build_retry_policy()
         self.pipeline = StreamingPipeline(self.client)
 
+    async def aclose(self) -> None:
+        """Release the upstream client and its connection pool.
+
+        Called from the FastAPI lifespan on shutdown so the pool is not
+        abandoned at process exit.
+        """
+        await self.client.aclose()
+
     def _emit_attempt_telemetry(
         self,
         status: int | None,
@@ -584,7 +592,7 @@ class Proxy:
             # Data collection: record every attempt. `response_body` holds only
             # what is actually delivered to the client — a retried attempt's
             # body is discarded, so it is recorded as null.
-            self.recorder.record(
+            await self.recorder.record(
                 {
                     **base_entry,
                     "attempt": attempt,
@@ -697,7 +705,7 @@ class Proxy:
             step = _first_applicable_step(ladder, attempts, turn, request_payload)
             if step is not None:
                 resubmitted = step.apply(turn, request_payload)
-                self._record_remediation_pass(
+                await self._record_remediation_pass(
                     step,
                     base_entry,
                     result,
@@ -720,7 +728,7 @@ class Proxy:
             coast_outcome = _remediation_outcome(
                 _find_step(ladder, "coast"), attempts, turn, request_payload
             )
-            return self._finalize_success(
+            return await self._finalize_success(
                 base_entry,
                 result,
                 guard,
@@ -749,7 +757,7 @@ class Proxy:
             ladder.append(CoastPolicy.from_settings())
         return ladder
 
-    def _record_remediation_pass(
+    async def _record_remediation_pass(
         self,
         step: Remediation,
         base_entry: dict,
@@ -764,13 +772,13 @@ class Proxy:
         bespoke shape (``nudge``/``coast``/``runaway``/``loop_retry``).
         """
         if step.name == "nudge":
-            self._record_nudge_pass(base_entry, result, client_wants_stream, attempt)
+            await self._record_nudge_pass(base_entry, result, client_wants_stream, attempt)
         elif step.name == "coast":
-            self._record_coast_pass(base_entry, result, client_wants_stream, attempt)
+            await self._record_coast_pass(base_entry, result, client_wants_stream, attempt)
         elif step.name == "runaway":
-            self._record_runaway_pass(base_entry, result, attempt, resubmitted_body)
+            await self._record_runaway_pass(base_entry, result, attempt, resubmitted_body)
         elif step.name == "loop_retry":
-            self._record_loop_retry_pass(base_entry, result, attempt, resubmitted_body)
+            await self._record_loop_retry_pass(base_entry, result, attempt, resubmitted_body)
         else:  # pragma: no cover - defensive; all ladder names are known
             raise ValueError(f"unknown remediation step: {step.name}")
 
@@ -839,7 +847,7 @@ class Proxy:
             # Retrying just re-enters the loop, or re-waits for a silent model.
             if loop_verdict is not None:
                 route = route_for(loop_verdict.kind)
-                self.recorder.record(
+                await self.recorder.record(
                     {
                         **base_entry,
                         "attempt": attempt,
@@ -882,7 +890,7 @@ class Proxy:
                 # `error` is only ever set by the exception handler above,
                 # which also classifies the failure, so `diagnosis` is set.
                 assert diagnosis is not None
-                self.recorder.record(
+                await self.recorder.record(
                     {
                         **base_entry,
                         "attempt": attempt,
@@ -918,7 +926,7 @@ class Proxy:
             if status is not None and status >= 400:
                 diagnosis = policy.detector.diagnose_status(status, body=error_body)
                 decision = await self._retry_decision(diagnosis, attempt, policy.max_attempts)
-                self.recorder.record(
+                await self.recorder.record(
                     {
                         **base_entry,
                         "attempt": attempt,
@@ -981,7 +989,7 @@ class Proxy:
             )
         )
 
-    def _record_nudge_pass(
+    async def _record_nudge_pass(
         self,
         base_entry: dict,
         result: _StreamResult,
@@ -994,7 +1002,7 @@ class Proxy:
                 result.meta, result.content, result.reasoning, result.tool_calls
             )
         ).encode("utf-8")
-        self.recorder.record(
+        await self.recorder.record(
             {
                 **base_entry,
                 "attempt": result.attempt,
@@ -1012,7 +1020,7 @@ class Proxy:
             }
         )
 
-    def _record_coast_pass(
+    async def _record_coast_pass(
         self,
         base_entry: dict,
         result: _StreamResult,
@@ -1025,7 +1033,7 @@ class Proxy:
                 result.meta, result.content, result.reasoning, result.tool_calls
             )
         ).encode("utf-8")
-        self.recorder.record(
+        await self.recorder.record(
             {
                 **base_entry,
                 "attempt": result.attempt,
@@ -1043,7 +1051,7 @@ class Proxy:
             }
         )
 
-    def _record_runaway_pass(
+    async def _record_runaway_pass(
         self,
         base_entry: dict,
         result: _StreamResult,
@@ -1056,7 +1064,7 @@ class Proxy:
         re-submission, so the appended instruction is auditable against the
         client's original ``request_body`` (already in the entry).
         """
-        self.recorder.record(
+        await self.recorder.record(
             {
                 **base_entry,
                 "attempt": result.attempt,
@@ -1075,7 +1083,7 @@ class Proxy:
             }
         )
 
-    def _record_loop_retry_pass(
+    async def _record_loop_retry_pass(
         self,
         base_entry: dict,
         result: _StreamResult,
@@ -1088,7 +1096,7 @@ class Proxy:
         re-submission, so the overridden sampling parameters are auditable
         against the client's original ``request_body`` (already in the entry).
         """
-        self.recorder.record(
+        await self.recorder.record(
             {
                 **base_entry,
                 "attempt": result.attempt,
@@ -1107,7 +1115,7 @@ class Proxy:
             }
         )
 
-    def _finalize_success(
+    async def _finalize_success(
         self,
         base_entry: dict,
         result: _StreamResult,
@@ -1142,7 +1150,7 @@ class Proxy:
         if coast_outcome is not None:
             coast_entry = {"attempts": coast_attempt, "outcome": coast_outcome}
 
-        self.recorder.record(
+        await self.recorder.record(
             {
                 **base_entry,
                 "attempt": result.attempt,

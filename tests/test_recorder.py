@@ -5,6 +5,7 @@ Runs with plain Python (stdlib only) inside the container:
     docker compose exec -T gateway python - < tests/test_recorder.py
 """
 
+import asyncio
 import json
 import tempfile
 import traceback
@@ -23,7 +24,7 @@ def test_fresh_dir_starts_new_file():
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "records.jsonl"
         recorder = Recorder(path)
-        recorder.record({"method": "POST", "path": "/x"})
+        asyncio.run(recorder.record({"method": "POST", "path": "/x"}))
         assert path.exists(), "record file should be created on first write"
         # No rotation happened: only the target file exists.
         assert sorted(p.name for p in Path(tmp).iterdir()) == ["records.jsonl"]
@@ -35,12 +36,12 @@ def test_existing_file_is_rotated_on_restart():
 
         # First run writes a record.
         first = Recorder(path)
-        first.record({"run": "one"})
+        asyncio.run(first.record({"run": "one"}))
 
         # Restart: the old file must be rotated aside (timestamp appended),
         # and a fresh file created on the next write.
         second = Recorder(path)
-        second.record({"run": "two"})
+        asyncio.run(second.record({"run": "two"}))
 
         files = sorted(p.name for p in Path(tmp).iterdir())
         # One rotated file + the fresh target.
@@ -60,10 +61,10 @@ def test_existing_file_is_rotated_on_restart():
 def test_no_rotation_when_file_absent_on_second_run():
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "records.jsonl"
-        Recorder(path).record({"a": 1})
+        asyncio.run(Recorder(path).record({"a": 1}))
         # Remove the file entirely, then "restart" — nothing to rotate.
         path.unlink()
-        Recorder(path).record({"b": 2})
+        asyncio.run(Recorder(path).record({"b": 2}))
         assert sorted(p.name for p in Path(tmp).iterdir()) == ["records.jsonl"]
 
 

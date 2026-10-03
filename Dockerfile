@@ -20,6 +20,10 @@ RUN pip install --no-cache-dir --require-hashes -r requirements-dev.lock
 COPY pyproject.toml .
 COPY source/ source/
 COPY tests/ tests/
+# The config-drift test (tests/test_config.py) compares these generated files
+# against their source of truth in source/app/config.py.
+COPY .env.example .
+COPY docs/ docs/
 
 # Runtime image: the gateway as a user runs it.
 FROM base AS runtime

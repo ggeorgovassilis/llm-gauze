@@ -88,7 +88,10 @@ Detection and remediation are separate, pluggable concerns — see
   classify a failure into a `Diagnosis`.
 - **Remediation** policies (`NudgePolicy`, `CoastPolicy`, `LoopRetryPolicy`, …)
   turn a diagnosis into behaviour — a re-submission or a content transform.
-- Add any new configuration to `source/app/config.py`, and document it in both
-  [`docs/configuration.md`](docs/configuration.md) and `.env.example`.
+- Add any new configuration to `source/app/config.py` with a `description`,
+  `section`, and validation constraints (ranges, enum-like status codes).
+  [`docs/configuration.md`](docs/configuration.md) and `.env.example` are
+  generated from it — run `python scripts/generate_config.py` to regenerate
+  them (or `--check` to verify they are up to date).
 - Add tests in `tests/` as `test_*.py` files with module-level `test_*`
   functions so `pytest` collects them. No per-file `__main__` runners.

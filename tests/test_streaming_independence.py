@@ -9,8 +9,6 @@ tool-call guard — regardless of their own switches.
 These tests drive the real ``Proxy.forward`` (the gating decision, not
 ``_forward_streaming``) with ``loop_detection_enabled=False`` and a single
 other streaming feature enabled, proving that feature still fires.
-
-    docker compose exec -T gateway python - < tests/test_streaming_independence.py
 """
 
 import asyncio

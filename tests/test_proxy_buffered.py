@@ -214,6 +214,82 @@ def test_reconstruct_sse_lines_includes_tool_calls():
     assert "get_weather" in "\n".join(lines)
 
 
+def _parse_sse_chunks(lines):
+    """Parse `_reconstruct_sse_lines` output into the chunk dicts (sans [DONE])."""
+    return [json.loads(line.removeprefix("data: ")) for line in lines[:-1]]
+
+
+def test_reconstruct_sse_lines_full_envelope():
+    meta = {
+        "id": "chatcmpl-123",
+        "created": 1700000000,
+        "model": "test-model",
+        "role": "assistant",
+        "finish_reason": "stop",
+    }
+    calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": "{}"},
+        },
+        {
+            "id": "call_2",
+            "type": "function",
+            "function": {"name": "get_time", "arguments": "{}"},
+        },
+    ]
+    lines = _reconstruct_sse_lines(
+        meta=meta, content="hello", reasoning="thinking", tool_calls=calls
+    )
+    assert lines[-1] == "data: [DONE]"
+    chunks = _parse_sse_chunks(lines)
+
+    # Fixed chunk order: role, reasoning_content, content, one per tool call,
+    # then the terminal empty-delta chunk.
+    assert [chunk["choices"][0]["delta"] for chunk in chunks] == [
+        {"role": "assistant"},
+        {"reasoning_content": "thinking"},
+        {"content": "hello"},
+        {"tool_calls": [{**calls[0], "index": 0}]},
+        {"tool_calls": [{**calls[1], "index": 1}]},
+        {},
+    ]
+
+    # Every chunk shares the same fixed envelope: one base id/created/model,
+    # one choices[0] with index 0, and finish_reason null on non-terminal chunks.
+    for chunk in chunks[:-1]:
+        assert chunk["id"] == "chatcmpl-123"
+        assert chunk["object"] == "chat.completion.chunk"
+        assert chunk["created"] == 1700000000
+        assert chunk["model"] == "test-model"
+        assert chunk["choices"][0]["index"] == 0
+        assert chunk["choices"][0]["finish_reason"] is None
+
+    terminal = chunks[-1]
+    assert terminal["id"] == "chatcmpl-123"
+    assert terminal["choices"][0]["delta"] == {}
+    assert terminal["choices"][0]["finish_reason"] == "stop"
+
+
+def test_reconstruct_sse_lines_defaults():
+    lines = _reconstruct_sse_lines(meta={}, content="", reasoning="", tool_calls=[])
+    assert lines[-1] == "data: [DONE]"
+    chunks = _parse_sse_chunks(lines)
+    assert len(chunks) == 2  # role chunk + terminal chunk
+
+    role_chunk, terminal = chunks
+    assert role_chunk["choices"][0]["delta"] == {"role": "assistant"}
+    assert role_chunk["choices"][0]["finish_reason"] is None
+    assert role_chunk["model"] == ""
+    assert isinstance(role_chunk["created"], int)
+    assert role_chunk["id"]  # freshly generated UUID hex
+    assert role_chunk["id"] == terminal["id"]  # base id reused across chunks
+
+    assert terminal["choices"][0]["delta"] == {}
+    assert terminal["choices"][0]["finish_reason"] == "stop"
+
+
 # --- buffered forward path integration --------------------------------
 
 

@@ -405,12 +405,14 @@ followed by a blank line):
    upstream's finish reason (defaulting to `"stop"`).
 6. `data: [DONE]`.
 
-Every chunk shares one fixed envelope: a single base `id`, `object:
-"chat.completion.chunk"`, one `created`, and one `model` value taken from the
-assembled turn's metadata, wrapped in a single `choices[0]` whose `index` is
-`0`; `finish_reason` is `null` on every chunk except the terminal one. This
-mirrors the values the non-streaming `chat.completion` client receives, so both
-client shapes observe the same cleaned turn.
+Every chunk shares one fixed envelope: a single base `id` (the assembled turn's
+`id`, or a freshly generated UUID when absent), `object: "chat.completion.chunk"`,
+one `created` (the turn's `created`, defaulting to `int(time.time())`), and one
+`model` value (the turn's `model`, defaulting to `""`), wrapped in a single
+`choices[0]` whose `index` is `0`; `finish_reason` is `null` on every chunk
+except the terminal one. This mirrors the values the non-streaming
+`chat.completion` client receives, so both client shapes observe the same
+cleaned turn.
 
 What is **not** preserved after a transform:
 

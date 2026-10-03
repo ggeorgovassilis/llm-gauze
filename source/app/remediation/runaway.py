@@ -27,7 +27,7 @@ without the gateway.
 """
 
 from app.config import settings
-from app.remediation.base import ContentWatchdog, StreamVerdict
+from app.remediation.base import ContentWatchdog, Remediation, StreamVerdict, Turn
 
 
 class RunawayReasoningDetector(ContentWatchdog):
@@ -101,13 +101,15 @@ class RunawayReasoningDetector(ContentWatchdog):
         )
 
 
-class RunawayReasoningPolicy:
+class RunawayReasoningPolicy(Remediation):
     """Build the re-submission for a runaway turn: append a stop-thinking nudge.
 
     ``apply`` appends a ``user`` message telling the model to stop analysing
     and produce its answer (or make the tool call) now. Pure and unit-testable
     without the gateway.
     """
+
+    name = "runaway"
 
     def __init__(
         self,
@@ -126,7 +128,11 @@ class RunawayReasoningPolicy:
             settings.runaway_reasoning_max_attempts,
         )
 
-    def apply(self, request_body: dict) -> dict:
+    def applies(self, turn: Turn, request_body: dict) -> bool:
+        """The ladder's trigger: a ``runaway_reasoning`` verdict."""
+        return turn.verdict is not None and turn.verdict.kind == "runaway_reasoning"
+
+    def apply(self, turn: Turn, request_body: dict) -> dict:
         """Return a copy of the request body with the nudge message appended."""
         body = dict(request_body)
         messages = list(body.get("messages") or [])

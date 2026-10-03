@@ -5,6 +5,7 @@ import traceback
 
 sys.path.insert(0, "source")
 
+from app.remediation.base import Turn
 from app.remediation.loop_retry import LoopRetryPolicy
 
 
@@ -23,7 +24,7 @@ def test_apply_sets_fallback_when_client_omits():
         "messages": [{"role": "user", "content": "hi"}],
         "stream": True,
     }
-    out = policy.apply(body)
+    out = policy.apply(Turn(), body)
     assert out["temperature"] == 1.2, out
     assert out["repeat_penalty"] == 1.3, out
     assert out["presence_penalty"] == 0.4, out
@@ -43,7 +44,7 @@ def test_apply_bumps_client_submitted_values():
         "presence_penalty": 0.2,
         "frequency_penalty": 0.2,
     }
-    out = policy.apply(body)
+    out = policy.apply(Turn(), body)
     assert out["temperature"] == 0.8, out
     assert out["repeat_penalty"] == 1.2, out
     assert out["presence_penalty"] == 0.3, out
@@ -57,7 +58,7 @@ def test_apply_does_not_mutate_input():
         "messages": [{"role": "user", "content": "hi"}],
         "temperature": 0.2,
     }
-    policy.apply(body)
+    policy.apply(Turn(), body)
     assert body["temperature"] == 0.2, body
     assert "repeat_penalty" not in body, body
 
@@ -70,7 +71,7 @@ def test_apply_mixed_fallback_and_bump():
         "messages": [{"role": "user", "content": "hi"}],
         "temperature": 0.0,
     }
-    out = policy.apply(body)
+    out = policy.apply(Turn(), body)
     # submitted -> bumped
     assert out["temperature"] == 0.1, out
     # omitted -> fallback

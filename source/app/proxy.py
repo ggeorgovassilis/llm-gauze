@@ -24,7 +24,7 @@ from app.pipeline import (  # noqa: F401  (_merge_tool_calls re-exported for tes
     _merge_tool_calls,
 )
 from app.recorder import Recorder
-from app.remediation.base import Detector, RetryPolicy, StreamVerdict
+from app.remediation.base import Detector, Remediation, RetryPolicy, StreamVerdict, Turn
 from app.remediation.coast import CoastPolicy
 from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
 from app.remediation.loop_retry import LoopRetryPolicy
@@ -339,6 +339,54 @@ def _build_retry_policy() -> RetryPolicy:
     )
 
 
+def _first_applicable_step(
+    ladder: list[Remediation],
+    attempts: dict[str, int],
+    turn: Turn,
+    request_body: dict,
+) -> Remediation | None:
+    """Return the first ladder rung whose trigger fires and has budget left.
+
+    Rungs are consulted in list order; the first match wins. A rung whose
+    ``max_attempts`` budget is already spent is skipped.
+    """
+    for step in ladder:
+        if attempts.get(step.name, 0) >= step.max_attempts:
+            continue
+        if step.applies(turn, request_body):
+            return step
+    return None
+
+
+def _find_step(ladder: list[Remediation], name: str) -> Remediation | None:
+    """Return the ladder rung with the given ``name``, else ``None``."""
+    for step in ladder:
+        if step.name == name:
+            return step
+    return None
+
+
+def _remediation_outcome(
+    step: Remediation | None,
+    attempts: dict[str, int],
+    turn: Turn,
+    request_body: dict,
+) -> str | None:
+    """Classify a rung's final disposition: ``succeeded`` / ``exhausted`` / None.
+
+    A rung that still triggers on the final turn exhausted its budget; one that
+    fired earlier but no longer triggers succeeded. A rung that never fired has
+    no outcome.
+    """
+    if step is None:
+        return None
+    if step.applies(turn, request_body):
+        return "exhausted"
+    if attempts.get(step.name, 0) > 0:
+        return "succeeded"
+    return None
+
+
 class Proxy:
     """Forwards requests to the upstream, retrying transient failures."""
 
@@ -513,20 +561,19 @@ class Proxy:
         headers: dict,
         base_entry: dict,
     ) -> Response:
-        """Stream the upstream response; nudge an empty-text turn to retry.
+        """Stream the upstream response; drive the remediation ladder.
 
         The upstream is asked for ``stream: true`` so the output can be
         observed incrementally. Two independent detectors run — one over the
-        thinking (reasoning) stream, one over the visible response. A detected
-        *loop* is first remediated by re-submitting with varied sampling
-        (higher temperature, stronger repeat penalties) up to a small budget;
-        only if it still loops is the request aborted. A *stall* is never
-        retried — retrying just re-waits for a silent model.
+        thinking (reasoning) stream, one over the visible response.
 
-        On a successful but empty turn (``finish_reason`` stop, no content, no
-        tool calls, non-empty reasoning), the request is re-submitted with a
-        short nudge re-prompt, up to a small budget; when that budget is
-        exhausted the placeholder floor (think cleanup) is applied.
+        Remediation is an *ordered, composable ladder* of :class:`Remediation`
+        steps (loop retry, runaway nudge, empty-turn nudge, coast re-prompt),
+        each with its own trigger and attempt budget. After each exchange the
+        ladder is walked in order and the first rung whose trigger fires
+        re-submits; when no rung fires the outcome is final (abort on a
+        verdict, or finalise the assembled turn). A *stall* is never remediated
+        — retrying just re-waits for a silent model.
         """
         # `_ensure_stream` rewrites the body (stream forced on, JSON
         # re-serialised), so any inbound Content-Length is stale. Drop it and
@@ -541,19 +588,11 @@ class Proxy:
         # client gets the reconstructed chat.completion. See `_client_wants_stream`.
         client_wants_stream = _client_wants_stream(body)
 
-        nudge = NudgePolicy.from_settings() if settings.think_nudge_enabled else None
         guard = ThinkContentGuard.from_settings() if settings.think_cleanup_enabled else None
-        coast = CoastPolicy.from_settings() if settings.coast_detection_enabled else None
-        runaway_nudge = (
-            RunawayReasoningPolicy.from_settings() if settings.runaway_reasoning_enabled else None
-        )
+        ladder = self._build_remediation_ladder()
+        attempts: dict[str, int] = {step.name: 0 for step in ladder}
 
-        loop_retry = LoopRetryPolicy.from_settings() if settings.loop_retry_enabled else None
         current_body = body
-        nudge_attempt = 0
-        coast_attempt = 0
-        runaway_attempt = 0
-        loop_retry_attempt = 0
         while True:
             stream_body, _ = _ensure_stream(current_body)
             request_payload = json.loads(current_body)
@@ -566,97 +605,94 @@ class Proxy:
                 out_headers,
                 base_entry,
             )
+
+            turn = Turn(
+                finish_reason=result.finish_reason,
+                content=result.content,
+                reasoning=result.reasoning,
+                tool_calls=result.tool_calls,
+                verdict=result.loop_verdict,
+            )
+
+            step = _first_applicable_step(ladder, attempts, turn, request_payload)
+            if step is not None:
+                resubmitted = step.apply(turn, request_payload)
+                self._record_remediation_pass(
+                    step,
+                    base_entry,
+                    result,
+                    client_wants_stream,
+                    attempts[step.name],
+                    resubmitted,
+                )
+                attempts[step.name] += 1
+                current_body = json.dumps(resubmitted).encode("utf-8")
+                continue
+
+            # No rung fired: the outcome is final. A verdict (loop/stall/
+            # runaway) aborts; a clean turn is finalised (nudge/coast floors).
             if result.response is not None:
-                # A *runaway-reasoning* turn (reasoned without ever answering)
-                # is remediated by re-submitting with a stop-thinking nudge;
-                # varied sampling cannot make a model stop reasoning, but an
-                # explicit instruction can. Capped by a small budget.
-                if (
-                    runaway_nudge is not None
-                    and result.loop_verdict is not None
-                    and result.loop_verdict.kind == "runaway_reasoning"
-                    and runaway_attempt < runaway_nudge.max_attempts
-                ):
-                    resubmitted = runaway_nudge.apply(request_payload)
-                    self._record_runaway_pass(base_entry, result, runaway_attempt, resubmitted)
-                    runaway_attempt += 1
-                    current_body = json.dumps(resubmitted).encode("utf-8")
-                    continue
-                # A *loop* (not a stall) can be broken by re-submitting with
-                # varied sampling — a loop is often a fixed point of the
-                # sampler. Stalls are aborted outright (retrying just re-waits
-                # for a silent model).
-                if (
-                    loop_retry is not None
-                    and result.loop_verdict is not None
-                    and result.loop_verdict.kind == "loop"
-                    and loop_retry_attempt < loop_retry.max_attempts
-                ):
-                    resubmitted = loop_retry.apply(request_payload)
-                    self._record_loop_retry_pass(
-                        base_entry, result, loop_retry_attempt, resubmitted
-                    )
-                    loop_retry_attempt += 1
-                    current_body = json.dumps(resubmitted).encode("utf-8")
-                    continue
                 return result.response
 
-            empty_turn = bool(
-                nudge is not None
-                and nudge.should_nudge(
-                    result.finish_reason,
-                    result.content,
-                    result.tool_calls,
-                    result.reasoning,
-                )
+            nudge_outcome = _remediation_outcome(
+                _find_step(ladder, "nudge"), attempts, turn, request_payload
             )
-            if empty_turn and nudge is not None and nudge_attempt < nudge.max_attempts:
-                self._record_nudge_pass(base_entry, result, client_wants_stream, nudge_attempt)
-                nudge_attempt += 1
-                current_body = json.dumps(nudge.apply(request_payload)).encode("utf-8")
-                continue
-
-            coast_turn = bool(
-                coast is not None
-                and coast.should_nudge(
-                    result.finish_reason,
-                    result.content,
-                    result.tool_calls,
-                    result.reasoning,
-                    request_payload.get("tools"),
-                    request_payload.get("messages"),
-                )
+            coast_outcome = _remediation_outcome(
+                _find_step(ladder, "coast"), attempts, turn, request_payload
             )
-            if coast_turn and coast is not None and coast_attempt < coast.max_attempts:
-                self._record_coast_pass(base_entry, result, client_wants_stream, coast_attempt)
-                coast_attempt += 1
-                current_body = json.dumps(coast.apply(request_payload, result.content)).encode(
-                    "utf-8"
-                )
-                continue
-
-            nudge_outcome = None
-            if empty_turn:
-                nudge_outcome = "exhausted"
-            elif nudge_attempt > 0:
-                nudge_outcome = "succeeded"
-
-            coast_outcome = None
-            if coast_turn:
-                coast_outcome = "exhausted"
-            elif coast_attempt > 0:
-                coast_outcome = "succeeded"
-
             return self._finalize_success(
                 base_entry,
                 result,
                 guard,
                 client_wants_stream,
-                nudge_attempt,
+                attempts.get("nudge", 0),
                 nudge_outcome,
-                coast_attempt,
+                attempts.get("coast", 0),
                 coast_outcome,
             )
+
+    def _build_remediation_ladder(self) -> list[Remediation]:
+        """Assemble the ordered, composable remediation ladder from settings.
+
+        Order matters: verdict remediations (runaway nudge, then loop retry)
+        run first, then the empty-turn rungs (nudge, then coast). A disabled
+        rung is simply left out — the ladder is a plain list of enabled steps.
+        """
+        ladder: list[Remediation] = []
+        if settings.runaway_reasoning_enabled:
+            ladder.append(RunawayReasoningPolicy.from_settings())
+        if settings.loop_retry_enabled:
+            ladder.append(LoopRetryPolicy.from_settings())
+        if settings.think_nudge_enabled:
+            ladder.append(NudgePolicy.from_settings())
+        if settings.coast_detection_enabled:
+            ladder.append(CoastPolicy.from_settings())
+        return ladder
+
+    def _record_remediation_pass(
+        self,
+        step: Remediation,
+        base_entry: dict,
+        result: _StreamResult,
+        client_wants_stream: bool,
+        attempt: int,
+        resubmitted_body: dict,
+    ) -> None:
+        """Record a re-submission that a ladder rung just triggered.
+
+        Dispatches to the rung-specific recorder hook so each entry keeps its
+        bespoke shape (``nudge``/``coast``/``runaway``/``loop_retry``).
+        """
+        if step.name == "nudge":
+            self._record_nudge_pass(base_entry, result, client_wants_stream, attempt)
+        elif step.name == "coast":
+            self._record_coast_pass(base_entry, result, client_wants_stream, attempt)
+        elif step.name == "runaway":
+            self._record_runaway_pass(base_entry, result, attempt, resubmitted_body)
+        elif step.name == "loop_retry":
+            self._record_loop_retry_pass(base_entry, result, attempt, resubmitted_body)
+        else:  # pragma: no cover - defensive; all ladder names are known
+            raise ValueError(f"unknown remediation step: {step.name}")
 
     async def _stream_once(
         self,

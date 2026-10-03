@@ -21,9 +21,10 @@ without the gateway.
 """
 
 from app.config import settings
+from app.remediation.base import Transform
 
 
-class MessageOverflowGuard:
+class MessageOverflowGuard(Transform):
     """Warn and optionally truncate oversized ``role: "tool"`` messages.
 
     ``process(body)`` returns ``(body, changes)``: the request body with any
@@ -50,6 +51,10 @@ class MessageOverflowGuard:
             settings.message_overflow_truncate,
             settings.message_overflow_warning,
         )
+
+    def apply(self, body: dict) -> tuple[dict, list[dict]]:
+        """Canonical :class:`Transform` entry point (alias for :meth:`process`)."""
+        return self.process(body)
 
     def process(self, body: dict) -> tuple[dict, list[dict]]:
         """Rewrite oversized tool results; return the body and change records."""

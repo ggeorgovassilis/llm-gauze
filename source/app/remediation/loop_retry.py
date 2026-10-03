@@ -18,10 +18,13 @@ turns:
 """
 
 from app.config import settings
+from app.remediation.base import Remediation, Turn
 
 
-class LoopRetryPolicy:
+class LoopRetryPolicy(Remediation):
     """Build the re-submission body for a looped request."""
+
+    name = "loop_retry"
 
     def __init__(
         self,
@@ -57,7 +60,11 @@ class LoopRetryPolicy:
     def from_settings(cls) -> "LoopRetryPolicy":
         return cls()
 
-    def apply(self, request_body: dict) -> dict:
+    def applies(self, turn: Turn, request_body: dict) -> bool:
+        """The ladder's trigger: a ``loop`` verdict (not a stall)."""
+        return turn.verdict is not None and turn.verdict.kind == "loop"
+
+    def apply(self, turn: Turn, request_body: dict) -> dict:
         """Return a copy of the request body with varied sampling parameters.
 
         Model-appropriate sampling is the client's and endpoint's domain, so

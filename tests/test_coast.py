@@ -18,6 +18,7 @@ import traceback
 
 from app.proxy import Proxy
 from app.recorder import Recorder
+from app.remediation.base import Turn
 from app.remediation.coast import CoastPolicy
 from mock_upstream import MockUpstream, chunk, settings_override
 
@@ -188,7 +189,7 @@ def test_should_nudge_requires_stop_finish_reason():
 
 def test_apply_replays_coast_turn_and_appends_nudge():
     req = _loop_request()
-    out = CoastPolicy(text=_COAST_TEXT).apply(req, _COASTED_CONTENT)
+    out = CoastPolicy(text=_COAST_TEXT).apply(Turn(content=_COASTED_CONTENT), req)
     assert len(out["messages"]) == len(req["messages"]) + 2, out
     assert out["messages"][-2] == {
         "role": "assistant",

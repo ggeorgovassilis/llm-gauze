@@ -25,11 +25,12 @@ without the gateway.
 import re
 
 from app.config import settings
+from app.remediation.base import Transform
 
 _DEFAULT_TAGS = ("think", "thinking", "reasoning")
 
 
-class ThinkContentGuard:
+class ThinkContentGuard(Transform):
     """Relocate leaked thinking tags and guarantee a non-empty visible reply.
 
     ``clean(content, reasoning)`` returns ``(content, reasoning, changes)``:
@@ -53,6 +54,15 @@ class ThinkContentGuard:
         return cls(tags or _DEFAULT_TAGS, settings.think_empty_response_placeholder)
 
     # --- public API --------------------------------------------------
+
+    def apply(
+        self,
+        content: str,
+        reasoning: str = "",
+        tool_calls: list | None = None,
+    ) -> tuple[str, str, list[dict]]:
+        """Canonical :class:`Transform` entry point (alias for :meth:`clean`)."""
+        return self.clean(content, reasoning, tool_calls)
 
     def clean(
         self,

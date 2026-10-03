@@ -19,6 +19,7 @@ import traceback
 
 from app.proxy import Proxy
 from app.recorder import Recorder
+from app.remediation.base import Turn
 from app.remediation.runaway import (
     RunawayReasoningDetector,
     RunawayReasoningPolicy,
@@ -94,7 +95,7 @@ def test_detector_tool_call_counts_as_content():
 
 def test_policy_appends_nudge_without_mutation():
     body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
-    out = RunawayReasoningPolicy(text=_NUDGE_TEXT).apply(body)
+    out = RunawayReasoningPolicy(text=_NUDGE_TEXT).apply(Turn(), body)
     assert len(out["messages"]) == 2, out
     assert out["messages"][-1] == {"role": "user", "content": _NUDGE_TEXT}, out
     assert len(body["messages"]) == 1, body

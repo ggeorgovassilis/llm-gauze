@@ -64,9 +64,19 @@ When you change a direct dependency, regenerate the lockfiles with `pip-compile`
 (`pip-tools`), matching Python 3.12:
 
 ```bash
-pip-compile --generate-hashes --strip-extras --output-file requirements.lock source/requirements.txt
-pip-compile --generate-hashes --strip-extras --output-file requirements-dev.lock source/requirements.txt requirements-dev.txt
+pip-compile --generate-hashes --no-index --output-file=requirements.lock --strip-extras source/requirements.txt
+pip-compile --generate-hashes --no-index --output-file=requirements-dev.lock --strip-extras requirements-dev.txt source/requirements.txt
 ```
+
+These are the exact commands recorded in the lockfile headers, and must be used
+verbatim so a regeneration reproduces the committed files byte-for-byte. In
+particular:
+
+- `--no-index` makes `pip-compile` resolve against the local pip cache only,
+  rather than hitting PyPI — this is how the committed lockfiles were generated,
+  and why the flag (and the `--output-file=<name>` form) must match.
+- The dev lockfile lists `requirements-dev.txt` **before** `source/requirements.txt`,
+  so dev pins take precedence over the runtime pins they build on.
 
 Commit both lockfiles with the change.
 

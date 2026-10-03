@@ -38,8 +38,9 @@ module under `source/app/` (including `source/app/remediation/`), and skimmed
 - The "no assumptions, record first" principle is respected: the recorder is
   the shared substrate, and every remediation intervention is logged so a
   mutation is never silent.
-- The remediation modules are deliberately dependency-free (standard library
-  only) and mostly pure, so the *understanding* and *action* layers are
+- The remediation modules are deliberately dependency-free beyond the
+  project's existing `httpx` (standard library otherwise) and mostly pure, so
+  the *understanding* and *action* layers are
   unit-testable without a running gateway. This is a strong, deliberate
   property.
 
@@ -54,7 +55,7 @@ module under `source/app/` (including `source/app/remediation/`), and skimmed
   loop" (`note_token`/`remaining`, `note_reasoning`/`note_content`/`triggered`).
   The streaming loop in `proxy.py` therefore hard-codes each watchdog's bespoke
   API.
-- **The orchestration is a single object.** `proxy.py` is ~900 lines and
+- **The orchestration is a single object.** `proxy.py` is ~1,300 lines and
   `_stream_once()` alone mixes SSE line reading, metadata merging, tool-call
   accumulation, feeding four detectors, stall/runaway polling, the terminal
   `finish_reason == "length"` classification, transport/status retry, and the
@@ -181,17 +182,22 @@ module under `source/app/` (including `source/app/remediation/`), and skimmed
 
 **What is not good**
 
-- **There is no remediation/transform interface.** `docs/architecture.md` and
-  `DEVELOPING.md` say remediations "subclass the interfaces in
-  `source/app/remediation/base.py`", but `base.py` only defines the *detector*
-  side (`Detector`, `StreamDetector`) and the retry *action* (`Backoff`,
-  `RetryPolicy`). The re-submission policies (`NudgePolicy`, `CoastPolicy`,
+- **There is no remediation/transform interface.** `docs/architecture.md`
+  points future capabilities at the interfaces in
+  `source/app/remediation/base.py`, and the coding convention in
+  `.github/agents/coder.agent.md` says new "detectors/remediation subclass the
+  interfaces" there, but `base.py` only defines the *detector* side
+  (`Detector`, `StreamDetector`) and the retry *action* (`Backoff`,
+  `RetryPolicy`). (`DEVELOPING.md` is more precise: its "Detectors" bullet says
+  detectors subclass the interfaces, and it describes remediation policies
+  separately.) The re-submission policies (`NudgePolicy`, `CoastPolicy`,
   `RunawayReasoningPolicy`, `LoopRetryPolicy`) and the transforms
   (`ThinkContentGuard`, `ToolCallGuard`, `MessageOverflowGuard`) subclass
   nothing. They are duck-typed, and their `apply()`/`process()`/`validate()`
   signatures differ: nudge/runaway/loop-retry take `(body)`, coast takes
-  `(body, content)`, overflow returns `(body, changes)`, think and tool-call
-  return change lists. Composition is therefore hand-written per call site.
+  `(body, content)`, overflow returns `(body, changes)`, tool-call returns a
+  bare change list, and think returns a `(content, reasoning, changes)` tuple.
+  Composition is therefore hand-written per call site.
 - **Ordering is a hard-coded `if`-chain.** The remediation ladder in
   `_forward_streaming()`'s `while True` loop is a sequence of conditional
   blocks with bespoke bookkeeping (`nudge_attempt`, `coast_attempt`,
@@ -245,8 +251,9 @@ module under `source/app/` (including `source/app/remediation/`), and skimmed
 
 **What is not good**
 
-- **`proxy.py` knows every module by name.** It imports all eleven remediation
-  classes and instantiates them inline. The architecture promise that "future
+- **`proxy.py` knows every module by name.** It imports from all eleven
+  remediation modules and instantiates their classes inline. The architecture
+  promise that "future
   capabilities implement these interfaces rather than editing the proxy" is
   only true for buffered detectors; every transform, policy, and watchdog
   requires an edit to `proxy.py` (import, instantiate, and a new branch in the
@@ -320,7 +327,7 @@ module under `source/app/` (including `source/app/remediation/`), and skimmed
   built at module import in `main.py`, and the record path is fixed there. A
   config change requires a restart (acceptable for a gateway), but it means
   configuration cannot be validated or varied without a process boundary.
-- The setting count is growing (~40 knobs and counting); each feature adds a
+- The setting count is growing (~50 knobs and counting); each feature adds a
   master switch plus several tuning values, which compounds the documentation
   duplication above.
 

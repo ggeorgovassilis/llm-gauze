@@ -13,10 +13,6 @@ class Settings(BaseSettings):
     # Upstream local LLM provider (OpenAI-compatible API).
     llm_base_url: str = "http://host.docker.internal:14434"
 
-    # Gateway listen address/port.
-    host: str = "0.0.0.0"
-    port: int = 8000
-
     # Upstream read/write timeout, in seconds (how long to wait for a
     # response once connected — generation can be slow).
     request_timeout: float = 300.0

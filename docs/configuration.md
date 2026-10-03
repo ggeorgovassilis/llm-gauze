@@ -13,8 +13,7 @@ below, grouped by feature, with its default.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `LLM_BASE_URL` | `http://host.docker.internal:14434` | Upstream local LLM (OpenAI-compatible API). |
-| `HOST` | `0.0.0.0` | Gateway listen address. |
-| `PORT` | `8000` | Gateway listen port *inside* the container. The compose files publish it on the host as `9317` (override via `.env`). |
+| `PORT` | `9317` | Host port the gateway is published on. This is a compose `ports:` mapping only — the gateway always listens on port `8000` *inside* the container. |
 | `REQUEST_TIMEOUT` | `300` | Upstream read/write timeout in seconds once connected — generation can be slow. |
 | `CONNECT_TIMEOUT` | `10` | Upstream connection timeout in seconds; kept short so a dead/blackholed endpoint fails fast. |
 | `DATA_DIR` | `/data` | Directory where exchanges are recorded. |

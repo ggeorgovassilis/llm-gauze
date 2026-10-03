@@ -26,6 +26,8 @@ FROM base AS runtime
 
 COPY source/ .
 
+# The gateway listens on a fixed port 8000 inside the container; the compose
+# files map a host port onto it (see `PORT` in `.env.example`).
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

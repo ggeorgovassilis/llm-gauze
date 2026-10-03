@@ -19,7 +19,7 @@ Key design points:
 import time
 
 from app.config import settings
-from app.remediation.base import ContentWatchdog, StreamVerdict
+from app.remediation.base import ContentWatchdog, StreamVerdict, VerdictKind
 
 
 class StallDetector(ContentWatchdog):
@@ -98,7 +98,7 @@ class StallDetector(ContentWatchdog):
         else:
             reason = f"no first token within {self.ttft_seconds:g}s ({elapsed:g}s elapsed)"
         return StreamVerdict(
-            kind="stalled",
+            kind=VerdictKind.STALLED,
             reason=reason,
             details={
                 "ttft_seconds": self.ttft_seconds,

@@ -18,7 +18,7 @@ turns:
 """
 
 from app.config import settings
-from app.remediation.base import Remediation, Turn
+from app.remediation.base import Remediation, Turn, VerdictKind
 
 
 class LoopRetryPolicy(Remediation):
@@ -62,7 +62,7 @@ class LoopRetryPolicy(Remediation):
 
     def applies(self, turn: Turn, request_body: dict) -> bool:
         """The ladder's trigger: a ``loop`` verdict (not a stall)."""
-        return turn.verdict is not None and turn.verdict.kind == "loop"
+        return turn.verdict is not None and turn.verdict.kind == VerdictKind.LOOP
 
     def apply(self, turn: Turn, request_body: dict) -> dict:
         """Return a copy of the request body with varied sampling parameters.

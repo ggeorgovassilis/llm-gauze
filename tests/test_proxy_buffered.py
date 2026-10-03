@@ -5,9 +5,8 @@ Follow-up from the test audit (#39), finding F3: only the streaming path
 retry loop for non-chat-completion routes — successful passthrough,
 retry-then-success, exhausted-retry 502, and HTTP-error passthrough — plus the
 pure helpers that were previously uncovered: `_decode`, `_diagnosis_entry`,
-`_is_chat_completion`, `_ensure_stream`, `_filtered_headers`,
-`_abort_error_response`, and the synthesised branch of
-`_context_window_error_response`.
+`_is_chat_completion`, `_ensure_stream`, `_filtered_headers`, and the
+synthesised branch of `_context_window_error_response`.
 """
 
 import asyncio
@@ -17,7 +16,6 @@ import httpx
 from app.config import settings
 from app.proxy import (
     Proxy,
-    _abort_error_response,
     _apply_overflow_guard,
     _client_wants_stream,
     _context_window_error_response,
@@ -30,7 +28,7 @@ from app.proxy import (
     _reconstruct_sse_lines,
 )
 from app.recorder import Recorder
-from app.remediation.base import Diagnosis, StreamVerdict
+from app.remediation.base import Diagnosis
 from app.remediation.context import CONTEXT_WINDOW_CODE
 from mock_upstream import make_request, settings_override
 
@@ -119,33 +117,6 @@ def test_filtered_headers_strips_hop_by_hop_and_owned():
     out, ctype = _filtered_headers(headers)
     assert ctype == "application/json"
     assert out == {"x-custom": "yes"}
-
-
-def test_abort_error_response_loop():
-    resp = _abort_error_response(StreamVerdict(kind="loop", reason="repetitive"))
-    assert resp.status_code == settings.loop_abort_status
-    data = json.loads(resp.body)
-    assert data["error"]["type"] == "loop_detected", data
-    assert "loop" in data["error"]["message"]
-
-
-def test_abort_error_response_stalled():
-    resp = _abort_error_response(StreamVerdict(kind="stalled", reason="silent"))
-    assert resp.status_code == settings.stall_abort_status
-    assert json.loads(resp.body)["error"]["type"] == "stalled_detected"
-
-
-def test_abort_error_response_runaway():
-    resp = _abort_error_response(StreamVerdict(kind="runaway_reasoning", reason="thinks endlessly"))
-    assert resp.status_code == settings.runaway_reasoning_abort_status
-    assert json.loads(resp.body)["error"]["type"] == "runaway_reasoning_detected"
-
-
-def test_abort_error_response_unknown_kind():
-    resp = _abort_error_response(StreamVerdict(kind="mystery", reason="??"))
-    data = json.loads(resp.body)
-    assert data["error"]["type"] == "mystery_detected", data
-    assert "mystery" in data["error"]["message"]
 
 
 def test_context_window_error_response_passthrough():

@@ -15,6 +15,7 @@ import traceback
 from app.config import settings
 from app.proxy import Proxy
 from app.recorder import Recorder
+from app.remediation.base import VerdictKind
 from mock_upstream import MockUpstream, chunk, settings_override, sse
 
 _chunk = chunk
@@ -135,7 +136,7 @@ def test_stall_abort_records_partial_output():
         resp.body,
     )
     records = [json.loads(line) for line in open("/tmp/stall_integration.jsonl") if line.strip()]
-    abort = [r for r in records if r.get("abort_kind") == "stalled"][-1]
+    abort = [r for r in records if r.get("abort_kind") == VerdictKind.STALLED.value][-1]
     assert abort["partial_reasoning"] == "about to call a tool", abort
     assert abort["partial_content"] is None, abort
 

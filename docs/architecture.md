@@ -102,6 +102,9 @@ rewrites a value and reports its mutations, never re-submitting.
   validates/repairs/flags malformed tool-call JSON.
 - `app/remediation/loop_retry.py` — `LoopRetryPolicy`, re-submit a looped
   request with varied sampling (behaviour described under Loop detection).
+- `app/remediation/verdicts.py` — `VerdictRoute` / `VERDICT_ROUTES` /
+  `route_for`, the single registry that maps each `VerdictKind` to its abort
+  response (message, HTTP status) and telemetry (outcome label, abort counter).
 
 `RetryableDetector` classifies transport-level failures **by category**
 (`httpx.RequestError`, `OSError`, `TimeoutError`) rather than enumerating every
@@ -208,7 +211,8 @@ the retry decision:
 - `ContextWindowDetector` wraps the retryable-status detector and matches a set
   of exact, case-insensitive substrings (`CONTEXT_WINDOW_MARKERS`). Exact
   matching keeps it free of false positives — no fuzzy heuristics.
-- A match produces `Diagnosis(retryable=False, code="context_window_exceeded")`,
+- A match produces
+  `Diagnosis(retryable=False, code=DiagnosisCode.CONTEXT_WINDOW_EXCEEDED)`,
   which short-circuits the retry loop. The upstream's own error is then
   forwarded **verbatim** (its status and body — token count, `n_ctx`, fix
   hints — are passed through unchanged) rather than translated into an llm-gauze

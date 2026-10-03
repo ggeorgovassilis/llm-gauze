@@ -27,7 +27,7 @@ without the gateway.
 """
 
 from app.config import settings
-from app.remediation.base import ContentWatchdog, Remediation, StreamVerdict, Turn
+from app.remediation.base import ContentWatchdog, Remediation, StreamVerdict, Turn, VerdictKind
 
 
 class RunawayReasoningDetector(ContentWatchdog):
@@ -90,7 +90,7 @@ class RunawayReasoningDetector(ContentWatchdog):
     def verdict(self) -> StreamVerdict:
         """Build the abort verdict for a runaway-reasoning stream."""
         return StreamVerdict(
-            kind="runaway_reasoning",
+            kind=VerdictKind.RUNAWAY_REASONING,
             reason=(
                 f"reasoning token budget exceeded ({self.reasoning_tokens} tokens) with no content"
             ),
@@ -130,7 +130,7 @@ class RunawayReasoningPolicy(Remediation):
 
     def applies(self, turn: Turn, request_body: dict) -> bool:
         """The ladder's trigger: a ``runaway_reasoning`` verdict."""
-        return turn.verdict is not None and turn.verdict.kind == "runaway_reasoning"
+        return turn.verdict is not None and turn.verdict.kind == VerdictKind.RUNAWAY_REASONING
 
     def apply(self, turn: Turn, request_body: dict) -> dict:
         """Return a copy of the request body with the nudge message appended."""

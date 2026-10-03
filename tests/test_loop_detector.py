@@ -9,12 +9,14 @@ import random
 import traceback
 
 try:
+    from app.remediation.base import VerdictKind
     from app.remediation.loop import ThinkingLoopDetector  # noqa: F401
 except ImportError:  # pragma: no cover - run on host without the container
     import sys
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "source"))
+    from app.remediation.base import VerdictKind
     from app.remediation.loop import ThinkingLoopDetector  # noqa: F401
 
 
@@ -114,7 +116,7 @@ def test_repetitive_loop():
     if verdict is None:
         verdict = detector.check()
     assert verdict is not None, "expected a loop, none detected"
-    assert verdict.kind == "loop", verdict
+    assert verdict.kind == VerdictKind.LOOP, verdict
     assert "entropy" in verdict.reason, verdict
 
 
@@ -155,7 +157,7 @@ def test_arming_gate():
         verdict = detector.check() or verdict
     if verdict is None:
         verdict = detector.check()
-    assert verdict is not None and verdict.kind == "loop", verdict
+    assert verdict is not None and verdict.kind == VerdictKind.LOOP, verdict
 
 
 def test_enumeration_of_tool_results_does_not_loop():
@@ -190,7 +192,7 @@ def test_reset_clears_state():
     for _ in range(30):
         detector.note(content="the cat sat on the mat. ")
         verdict = detector.check() or verdict
-    assert verdict is not None and verdict.kind == "loop"
+    assert verdict is not None and verdict.kind == VerdictKind.LOOP
 
     detector.reset()
     # After reset the buffer is empty, so the detector is disarmed again.

@@ -24,9 +24,16 @@ from app.pipeline import (  # noqa: F401  (_merge_tool_calls re-exported for tes
     _merge_tool_calls,
 )
 from app.recorder import Recorder
-from app.remediation.base import Detector, Remediation, RetryPolicy, StreamVerdict, Turn
+from app.remediation.base import (
+    Detector,
+    DiagnosisCode,
+    Remediation,
+    RetryPolicy,
+    StreamVerdict,
+    Turn,
+)
 from app.remediation.coast import CoastPolicy
-from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
+from app.remediation.context import ContextWindowDetector
 from app.remediation.loop_retry import LoopRetryPolicy
 from app.remediation.nudge import NudgePolicy
 from app.remediation.overflow import MessageOverflowGuard
@@ -34,6 +41,7 @@ from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.runaway import RunawayReasoningPolicy
 from app.remediation.think import ThinkContentGuard
 from app.remediation.tool_call import ToolCallGuard
+from app.remediation.verdicts import route_for
 from app.telemetry import telemetry
 
 logger = logging.getLogger("llm_gauze.proxy")
@@ -273,26 +281,12 @@ def _filtered_headers(headers: dict) -> tuple[dict, str | None]:
 
 def _abort_error_response(verdict: StreamVerdict) -> Response:
     """Build the client-facing response for an aborted stream (loop/stall)."""
-    kind = verdict.kind
-    message = {
-        "loop": ("The model entered a repetitive loop and the request was aborted."),
-        "stalled": ("The model stopped producing output and the request was aborted."),
-        "runaway_reasoning": (
-            "The model kept reasoning without producing an answer and the request was aborted."
-        ),
-    }.get(kind, f"The stream was aborted ({kind}).")
-    status_code = (
-        settings.loop_abort_status
-        if kind == "loop"
-        else settings.stall_abort_status
-        if kind == "stalled"
-        else settings.runaway_reasoning_abort_status
-    )
+    route = route_for(verdict.kind)
     body = json.dumps(
         {
             "error": {
-                "message": message,
-                "type": f"{kind}_detected",
+                "message": route.message,
+                "type": f"{route.kind.value}_detected",
                 "reason": verdict.reason,
                 "details": verdict.details,
             }
@@ -300,7 +294,7 @@ def _abort_error_response(verdict: StreamVerdict) -> Response:
     ).encode("utf-8")
     return Response(
         content=body,
-        status_code=status_code,
+        status_code=route.abort_status,
         media_type="application/json",
     )
 
@@ -332,7 +326,7 @@ def _context_window_error_response(
         {
             "error": {
                 "message": "context window exceeded",
-                "type": CONTEXT_WINDOW_CODE,
+                "type": DiagnosisCode.CONTEXT_WINDOW_EXCEEDED,
                 "reason": diagnosis.reason,
                 "details": {"upstream_status": status},
             }
@@ -460,8 +454,11 @@ class Proxy:
         retry loops from drifting apart.
         """
         policy = self.retry_policy
-        if diagnosis is not None and diagnosis.code == CONTEXT_WINDOW_CODE:
-            telemetry.incr("requests_total", {"outcome": "context_window_exceeded"})
+        if diagnosis is not None and diagnosis.code == DiagnosisCode.CONTEXT_WINDOW_EXCEEDED:
+            telemetry.incr(
+                "requests_total",
+                {"outcome": DiagnosisCode.CONTEXT_WINDOW_EXCEEDED.value},
+            )
             telemetry.incr("context_window_aborts_total")
             return "context_window"
         if policy.should_retry(diagnosis, attempt):
@@ -836,15 +833,12 @@ class Proxy:
                         "duration": time.time() - started,
                     }
                 )
-                if loop_verdict.kind == "loop":
-                    telemetry.incr("requests_total", {"outcome": "loop_aborted"})
-                    telemetry.incr("loop_aborts_total", {"stream": loop_stream or "unknown"})
-                elif loop_verdict.kind == "runaway_reasoning":
-                    telemetry.incr("requests_total", {"outcome": "runaway_reasoning_aborted"})
-                    telemetry.incr("runaway_reasoning_aborts_total")
+                route = route_for(loop_verdict.kind)
+                telemetry.incr("requests_total", {"outcome": route.outcome})
+                if route.stream_labeled:
+                    telemetry.incr(route.abort_metric, {"stream": loop_stream or "unknown"})
                 else:
-                    telemetry.incr("requests_total", {"outcome": "stalled"})
-                    telemetry.incr("stall_aborts_total")
+                    telemetry.incr(route.abort_metric)
                 logger.error(
                     "%s DETECTED request_id=%s stream=%s reason=%s",
                     loop_verdict.kind.upper(),

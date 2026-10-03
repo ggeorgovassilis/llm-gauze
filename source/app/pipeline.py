@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from app.config import settings
-from app.remediation.base import StreamVerdict
+from app.remediation.base import StreamVerdict, VerdictKind
 from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.runaway import RunawayReasoningDetector
 from app.remediation.stall import StallDetector
@@ -284,7 +284,7 @@ class StreamingPipeline:
             and not outcome.tool_calls
         ):
             outcome.verdict = StreamVerdict(
-                kind="runaway_reasoning",
+                kind=VerdictKind.RUNAWAY_REASONING,
                 reason=(
                     "output window exhausted while reasoning (finish_reason=length, no content)"
                 ),
@@ -296,7 +296,7 @@ class StreamingPipeline:
             outcome.verdict_stream = "reasoning"
         elif settings.loop_detection_enabled:
             outcome.verdict = StreamVerdict(
-                kind="loop",
+                kind=VerdictKind.LOOP,
                 reason=("output window exhausted (finish_reason=length)"),
                 details={"finish_reason": "length"},
             )

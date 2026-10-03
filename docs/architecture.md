@@ -384,6 +384,49 @@ out of scope: the gateway does not know the tool schema. This guard only ensures
 `arguments` is *well-formed JSON*.
 
 
+## SSE reconstruction fidelity
+
+For a `stream: true` turn the gateway emits Server-Sent Events. When a content
+transform (think-cleanup or tool-repair) has changed the output, the raw
+upstream SSE lines still carry the pre-remediation values, so the stream is
+**rebuilt** from the cleaned values by `_reconstruct_sse_lines()`. This section
+specifies the exact shape that rebuild emits. It is a contract we maintain and
+test against — not a description of the upstream's own framing.
+
+After a transform, the emitted stream is a fixed sequence of `data:` lines (each
+followed by a blank line):
+
+1. One **role** chunk — a `delta` of `{"role": "<role>"}` (default `assistant`).
+2. One **`reasoning_content`** chunk — only when reasoning is present.
+3. One **`content`** chunk — only when content is present.
+4. One chunk **per tool call**, in order — a `delta` of
+   `{"tool_calls": [<call>]}` with the call's `index` set to its position.
+5. One **terminal** chunk — an empty `delta` (`{}`) whose `finish_reason` is the
+   upstream's finish reason (defaulting to `"stop"`).
+6. `data: [DONE]`.
+
+Every chunk shares one fixed envelope: a single base `id`, `object:
+"chat.completion.chunk"`, one `created`, and one `model` value taken from the
+assembled turn's metadata, wrapped in a single `choices[0]` whose `index` is
+`0`; `finish_reason` is `null` on every chunk except the terminal one. This
+mirrors the values the non-streaming `chat.completion` client receives, so both
+client shapes observe the same cleaned turn.
+
+What is **not** preserved after a transform:
+
+- **Upstream chunk boundaries** — the stream is collapsed into the fixed
+  one-chunk-per-field shape above, regardless of how the upstream split its
+  deltas.
+- **Per-chunk `id` values** — the upstream's per-chunk ids are discarded; the
+  one base `id` is reused for every chunk.
+- **`usage` frames** — the rebuild emits no `usage` chunk (usage, when known, is
+  only carried on the non-streaming completion).
+
+The untouched path is different and preserves fidelity: when **no** transform
+changed the output, the upstream SSE lines pass through **verbatim**, and a
+trailing `data: [DONE]` is appended only if the upstream omitted it.
+
+
 ## Message overflow
 
 A tool result can be arbitrarily large, and a local model has no way to know it

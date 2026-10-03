@@ -29,6 +29,10 @@ _METRICS = {
     "upstream_errors_total": ("counter", "Transport errors, by exception type."),
     "loop_aborts_total": ("counter", "Loops aborted, by stream."),
     "stall_aborts_total": ("counter", "Stalls aborted."),
+    "runaway_reasoning_aborts_total": (
+        "counter",
+        "Runaway-reasoning aborts.",
+    ),
     "context_window_aborts_total": (
         "counter",
         "Context-window overflows aborted.",

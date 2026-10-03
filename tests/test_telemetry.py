@@ -79,9 +79,22 @@ def test_prometheus_rendering():
     assert "# TYPE requests_total counter" in text
     assert 'requests_total{outcome="success"} 1' in text
     assert 'loop_aborts_total{stream="thinking"} 1' in text
+    # A counter with no recorded samples still appears in the text exposition.
+    assert "# TYPE runaway_reasoning_aborts_total counter" in text
+    assert "runaway_reasoning_aborts_total 0" in text
     assert 'upstream_latency_seconds_bucket{le="5"} 1' in text
     assert 'upstream_latency_seconds_bucket{le="+Inf"} 1' in text
     assert "upstream_down 1" in text
+
+
+def test_runaway_reasoning_aborts_exposition():
+    t = Telemetry()
+    t.incr("runaway_reasoning_aborts_total")
+    t.incr("runaway_reasoning_aborts_total")
+    text = t.render_prometheus()
+    assert "# HELP runaway_reasoning_aborts_total Runaway-reasoning aborts." in text
+    assert "# TYPE runaway_reasoning_aborts_total counter" in text
+    assert "runaway_reasoning_aborts_total 2" in text
 
 
 def test_json_snapshot_is_serialisable():

@@ -29,12 +29,17 @@ check_untyped_defs = true
 [tool.coverage.run]
 # Measure the application under test, never the test files themselves.
 source = ["app"]
+# Also measure branch coverage (each conditional's true/false path), not just
+# statements. The reported total — and therefore the `fail_under` floor below —
+# becomes the combined line + branch coverage (see test audit #57).
+branch = true
 
 [tool.coverage.report]
-# Fail the suite below this line-coverage floor (see test audit, #39).
-# Measured 89% when the floor was introduced; keep headroom for small,
-# coverage-neutral refactors while still catching real regressions.
-fail_under = 85
+# Fail the suite below this floor. With `branch = true` (above) the reported
+# total — and therefore `fail_under` — is the *combined* line + branch coverage,
+# so a single floor enforces both (coverage.py has no separate branch floor).
+# Measured when the floor was raised: 92% line / 87% branch -> 92% combined.
+fail_under = 90
 show_missing = true
 skip_covered = false
 exclude_lines = [

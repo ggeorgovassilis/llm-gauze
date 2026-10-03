@@ -16,6 +16,7 @@ import traceback
 
 from app.proxy import Proxy
 from app.recorder import Recorder
+from app.remediation.base import Diagnosis
 from app.remediation.context import (
     CONTEXT_WINDOW_CODE,
     ContextWindowDetector,
@@ -85,6 +86,31 @@ def test_defers_when_no_marker():
 def test_defers_non_retryable_status():
     d = _detector()
     diagnosis = d.diagnose_status(404, body=b"not found")
+    assert diagnosis.retryable is False, diagnosis
+    assert diagnosis.code is None, diagnosis
+
+
+def test_diagnosis_str_returns_reason():
+    diagnosis = Diagnosis(
+        retryable=False,
+        reason="context window exceeded",
+        code=CONTEXT_WINDOW_CODE,
+    )
+    assert str(diagnosis) == "context window exceeded"
+
+
+def test_diagnose_status_without_body_defers():
+    # `body` defaults to None; `_decode` must treat it as empty (no marker).
+    d = _detector()
+    diagnosis = d.diagnose_status(500)
+    assert diagnosis.retryable is True, diagnosis
+    assert diagnosis.code is None, diagnosis
+
+
+def test_defers_exception_without_marker():
+    # Exception without a context-window signature defers to the fallback.
+    d = _detector()
+    diagnosis = d.diagnose_exception(RuntimeError("plain transient failure"))
     assert diagnosis.retryable is False, diagnosis
     assert diagnosis.code is None, diagnosis
 

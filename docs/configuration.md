@@ -26,6 +26,14 @@ below, grouped by feature, with its default.
 | `DATA_DIR` | `/data` | Directory where exchanges are recorded. |
 | `RECORD_FILE` | `records.jsonl` | Recording filename (appended, rotated). |
 
+## Logging & recording
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `LOG_LEVEL` | `INFO` | Log verbosity: DEBUG, INFO, WARNING, ERROR, or CRITICAL. |
+| `LOG_FORMAT` | `%(asctime)s %(name)s %(levelname)s %(message)s` | Format string for log lines (Python logging format syntax). |
+| `RECORDING_ENABLED` | `true` | Master switch for JSONL exchange recording. |
+
 ## Retries / backoff
 
 | Variable | Default | Description |

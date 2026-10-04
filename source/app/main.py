@@ -17,13 +17,13 @@ from app.recorder import Recorder
 from app.telemetry import telemetry
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    level=settings.log_level,
+    format=settings.log_format,
 )
 logger = logging.getLogger("llm_gauze")
 
 record_path = Path(settings.data_dir) / settings.record_file
-recorder = Recorder(record_path)
+recorder = Recorder(record_path, enabled=settings.recording_enabled)
 proxy = Proxy(recorder)
 
 
@@ -36,6 +36,7 @@ async def lifespan(app: FastAPI):
     """
     yield
     await proxy.aclose()
+    logger.info("llm-gauze gateway shut down")
 
 
 app = FastAPI(title="llm-gauze Gateway", lifespan=lifespan)

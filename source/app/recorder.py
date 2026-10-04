@@ -24,13 +24,18 @@ class Recorder:
     restart never appends to — or overwrites — the previous run's data.
     """
 
-    def __init__(self, record_path: str | Path) -> None:
+    def __init__(self, record_path: str | Path, enabled: bool = True) -> None:
+        self.enabled = enabled
         self.path = Path(record_path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._rotate_existing()
         # Serialises the appends so concurrent records still land in call
         # order (asyncio.Lock is FIFO-fair across waiters).
         self._write_lock = asyncio.Lock()
+        if not self.enabled:
+            # Disabled recording must not touch the filesystem: no directory
+            # creation and no rotation. ``record`` is a no-op.
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._rotate_existing()
 
     def _rotate_existing(self) -> None:
         """Move a pre-existing record file aside, appending a timestamp."""
@@ -58,13 +63,15 @@ class Recorder:
         ``record`` was called, preserving chronological order under
         concurrency.
         """
+        if not self.enabled:
+            return
         entry.setdefault("id", uuid.uuid4().hex)
         entry.setdefault("timestamp", time.time())
         line = json.dumps(entry, ensure_ascii=False, default=str)
         async with self._write_lock:
             await asyncio.to_thread(self._append, line)
 
-        logger.info(
+        logger.debug(
             "recorded exchange %s %s %s",
             entry.get("id"),
             entry.get("method"),

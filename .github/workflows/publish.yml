@@ -100,18 +100,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # GHCR package visibility is independent of repository visibility and
-      # defaults to private. This repository is public, so make the pushed
-      # image public too. The owner is a personal account, hence the `/user/`
-      # endpoint (an org repo would use `/orgs/<owner>/...`).
-      - name: Make GHCR package public
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api --method PATCH \
-            "/user/packages/container/${GITHUB_REPOSITORY##*/}/visibility" \
-            -f visibility=public
-
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -21,7 +21,7 @@ Every record carries:
 | `timestamp` | Unix time the record was written, assigned by the recorder. |
 | `request_id` | The request's id (present on the buffered path and on records written by callers that pass a `base_entry`). |
 | `method` / `path` / `query` | The inbound request method, path and query string. |
-| `request_headers` | The inbound request headers (buffered path). |
+| `request_headers` | The inbound request headers (buffered path); `Authorization` and `Proxy-Authorization` values are replaced with `[redacted]`. |
 | `request_body` | The client's original request body (decoded to a string). |
 | `attempt` / `max_attempts` | Which upstream attempt this record describes, and the configured retry budget. |
 | `duration` | Seconds spent on this attempt. |

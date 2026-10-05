@@ -59,6 +59,9 @@ HOP_BY_HOP_HEADERS = {
     "host",
 }
 
+# Request headers whose values are secrets: forwarded, never logged or recorded.
+_CREDENTIAL_HEADERS = {"authorization", "proxy-authorization"}
+
 # Headers we manage ourselves on the outbound response.
 _OWNED_RESPONSE_HEADERS = {"content-length", "content-type"}
 
@@ -300,19 +303,9 @@ def _filtered_headers(headers: dict) -> tuple[dict, str | None]:
     return out, content_type
 
 
-def _with_upstream_auth(headers: dict) -> dict:
-    """Add the configured ``LLM_BEARER_HEADER`` to the outbound headers.
-
-    The gateway's header replaces any client-supplied header of the same name;
-    all other headers are untouched. Returns ``headers`` as-is when unset.
-    """
-    parsed = settings.upstream_auth_header
-    if parsed is None:
-        return headers
-    name, value = parsed
-    out = {k: v for k, v in headers.items() if k.lower() != name.lower()}
-    out[name] = value
-    return out
+def _redact_credentials(headers: dict) -> dict:
+    """Copy of ``headers`` with credential values masked, for logs and records."""
+    return {k: "[redacted]" if k.lower() in _CREDENTIAL_HEADERS else v for k, v in headers.items()}
 
 
 def _abort_error_response(verdict: StreamVerdict) -> Response:
@@ -548,7 +541,7 @@ class Proxy:
             "incoming request method=%s path=%s headers=%r body=%r",
             method,
             url,
-            dict(request.headers),
+            _redact_credentials(dict(request.headers)),
             _decode(body),
         )
 
@@ -570,14 +563,13 @@ class Proxy:
             "method": method,
             "path": url,
             "query": query,
-            "request_headers": dict(request.headers),
+            "request_headers": _redact_credentials(dict(request.headers)),
             "request_body": _decode(body),
             "message_overflow": overflow_changes or None,
         }
 
+        # The client's Authorization header is forwarded to the upstream unchanged.
         headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP_HEADERS}
-        # Added after `base_entry` is built so the secret is never recorded.
-        headers = _with_upstream_auth(headers)
         if overflow_changes:
             # The body was rewritten, so any inbound Content-Length is stale;
             # let httpx recompute it from the actual body (see the streaming

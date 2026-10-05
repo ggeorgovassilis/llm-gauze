@@ -45,7 +45,9 @@ def sse(data: dict) -> bytes:
     return f"data: {json.dumps(data)}\n\n".encode()
 
 
-async def make_request(body: bytes, path: str = "/v1/chat/completions"):
+async def make_request(
+    body: bytes, path: str = "/v1/chat/completions", headers: dict[str, str] | None = None
+):
     """Build a starlette ``Request`` for driving the buffered ``Proxy.forward``."""
     from starlette.requests import Request
 
@@ -61,6 +63,7 @@ async def make_request(body: bytes, path: str = "/v1/chat/completions"):
         "headers": [
             (b"content-type", b"application/json"),
             (b"host", b"127.0.0.1"),
+            *((k.lower().encode(), v.encode()) for k, v in (headers or {}).items()),
         ],
         "client": ("127.0.0.1", 12345),
         "server": ("127.0.0.1", 8000),

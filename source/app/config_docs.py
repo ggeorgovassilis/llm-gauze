@@ -104,8 +104,7 @@ def configuration_md() -> str:
         lines.append("| Variable | Default | Description |")
         lines.append("| --- | --- | --- |")
         for name, default, description in rows:
-            default_cell = f"`{default}`" if default else "*(unset)*"
-            lines.append(f"| `{name}` | {default_cell} | {description} |")
+            lines.append(f"| `{name}` | `{default}` | {description} |")
         lines.append("")
 
     compose_rows = [(name, default, description) for name, default, description in COMPOSE_VARS]

@@ -21,7 +21,6 @@ below, grouped by feature, with its default.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `LLM_BASE_URL` | `http://host.docker.internal:14434` | Upstream local LLM (OpenAI-compatible API). |
-| `LLM_BEARER_HEADER` | *(unset)* | Optional header line sent on every upstream request, e.g. `Authorization: Bearer <token>` (the full line, not just the token). This is a secret: keep it out of version control. Unset or empty sends no header. |
 | `REQUEST_TIMEOUT` | `300` | Upstream read/write timeout in seconds once connected — generation can be slow. |
 | `CONNECT_TIMEOUT` | `10` | Upstream connection timeout in seconds; kept short so a dead/blackholed endpoint fails fast. |
 | `DATA_DIR` | `/data` | Directory where exchanges are recorded. |

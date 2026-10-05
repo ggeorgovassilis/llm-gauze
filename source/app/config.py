@@ -9,7 +9,7 @@ rather than editing those files by hand.
 
 from typing import Any
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,32 +47,6 @@ class Settings(BaseSettings):
         "Upstream & gateway",
         min_length=1,
     )
-
-    # Complete header line sent on every upstream request, e.g.
-    # "Authorization: Bearer <token>". A secret: kept as SecretStr so it never
-    # shows up in repr/model_dump, logs, or validation errors.
-    llm_bearer_header: SecretStr = _field(
-        SecretStr(""),
-        "Optional header line sent on every upstream request, e.g. "
-        "`Authorization: Bearer <token>` (the full line, not just the token). "
-        "This is a secret: keep it out of version control. Unset or empty sends no header.",
-        "Upstream & gateway",
-    )
-
-    # A pydantic validator would echo the raw input in its error, so the header is
-    # validated here instead and checked once at startup (see below).
-    @property
-    def upstream_auth_header(self) -> tuple[str, str] | None:
-        """``(name, value)`` parsed from ``llm_bearer_header``, or None when unset."""
-        line = self.llm_bearer_header.get_secret_value().strip()
-        if not line:
-            return None
-        if "\r" in line or "\n" in line:
-            raise ValueError("LLM_BEARER_HEADER must be a single line")
-        name, sep, value = line.partition(":")
-        if not sep or not name.strip() or not value.strip():
-            raise ValueError("LLM_BEARER_HEADER must be a full header line: 'Name: value'")
-        return name.strip(), value.strip()
 
     # Upstream read/write timeout, in seconds (how long to wait for a
     # response once connected — generation can be slow).
@@ -584,4 +558,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-settings.upstream_auth_header  # fail fast on a malformed LLM_BEARER_HEADER

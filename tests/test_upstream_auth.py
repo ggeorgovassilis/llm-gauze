@@ -106,6 +106,20 @@ def test_token_not_logged_or_recorded(tmp_path, caplog):
     assert TOKEN not in record_path.read_text()
 
 
+def test_token_not_logged_or_recorded_when_streaming(tmp_path, caplog):
+    record_path = tmp_path / "r.jsonl"
+    with caplog.at_level(logging.DEBUG):
+        resp, _ = _forward(
+            [_STREAM_OK],
+            record_path,
+            path="v1/chat/completions",
+            loop_detection_enabled=True,
+        )
+    assert resp.status_code == 200, resp.body
+    assert TOKEN not in caplog.text
+    assert TOKEN not in record_path.read_text()
+
+
 def test_with_upstream_auth_replaces_client_header_only():
     client = {"Authorization": "Bearer client", "X-Custom": "yes"}
     with settings_override(llm_bearer_header=SecretStr(HEADER)):
@@ -135,6 +149,13 @@ def test_bearer_header_is_not_exposed_in_repr_or_dump():
 
 @pytest.mark.parametrize("bad", ["no-colon", ": v4lue", "Authorization:", "A: b\r\nX: y"])
 def test_malformed_bearer_header_rejected_without_leaking_value(bad):
-    with pytest.raises(ValidationError) as excinfo:
-        Settings.model_validate({"llm_bearer_header": bad})
+    cfg = Settings.model_validate({"llm_bearer_header": bad})
+    with pytest.raises(ValueError) as excinfo:
+        _ = cfg.upstream_auth_header
     assert bad not in str(excinfo.value)
+
+
+def test_non_secret_validation_errors_still_show_the_input():
+    with pytest.raises(ValidationError) as excinfo:
+        Settings.model_validate({"request_timeout": "-7"})
+    assert "-7" in str(excinfo.value)

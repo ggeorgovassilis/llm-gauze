@@ -306,13 +306,12 @@ def _with_upstream_auth(headers: dict) -> dict:
     The gateway's header replaces any client-supplied header of the same name;
     all other headers are untouched. Returns ``headers`` as-is when unset.
     """
-    line = settings.llm_bearer_header.get_secret_value().strip()
-    if not line:
+    parsed = settings.upstream_auth_header
+    if parsed is None:
         return headers
-    name, _, value = line.partition(":")
-    name = name.strip()
+    name, value = parsed
     out = {k: v for k, v in headers.items() if k.lower() != name.lower()}
-    out[name] = value.strip()
+    out[name] = value
     return out
 
 

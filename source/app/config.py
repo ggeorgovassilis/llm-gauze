@@ -38,8 +38,6 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
-        # Validation errors must not echo input values (LLM_BEARER_HEADER is a secret).
-        hide_input_in_errors=True,
     )
 
     # Upstream local LLM provider (OpenAI-compatible API).
@@ -61,18 +59,20 @@ class Settings(BaseSettings):
         "Upstream & gateway",
     )
 
-    @field_validator("llm_bearer_header")
-    @classmethod
-    def _validate_bearer_header(cls, value: SecretStr) -> SecretStr:
-        line = value.get_secret_value().strip()
+    # A pydantic validator would echo the raw input in its error, so the header is
+    # validated here instead and checked once at startup (see below).
+    @property
+    def upstream_auth_header(self) -> tuple[str, str] | None:
+        """``(name, value)`` parsed from ``llm_bearer_header``, or None when unset."""
+        line = self.llm_bearer_header.get_secret_value().strip()
         if not line:
-            return SecretStr("")
-        name, sep, header_value = line.partition(":")
-        if not sep or not name.strip() or not header_value.strip():
-            raise ValueError("LLM_BEARER_HEADER must be a full header line: 'Name: value'")
+            return None
         if "\r" in line or "\n" in line:
             raise ValueError("LLM_BEARER_HEADER must be a single line")
-        return SecretStr(line)
+        name, sep, value = line.partition(":")
+        if not sep or not name.strip() or not value.strip():
+            raise ValueError("LLM_BEARER_HEADER must be a full header line: 'Name: value'")
+        return name.strip(), value.strip()
 
     # Upstream read/write timeout, in seconds (how long to wait for a
     # response once connected — generation can be slow).
@@ -584,3 +584,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+settings.upstream_auth_header  # fail fast on a malformed LLM_BEARER_HEADER

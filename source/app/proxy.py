@@ -300,6 +300,22 @@ def _filtered_headers(headers: dict) -> tuple[dict, str | None]:
     return out, content_type
 
 
+def _with_upstream_auth(headers: dict) -> dict:
+    """Add the configured ``LLM_BEARER_HEADER`` to the outbound headers.
+
+    The gateway's header replaces any client-supplied header of the same name;
+    all other headers are untouched. Returns ``headers`` as-is when unset.
+    """
+    line = settings.llm_bearer_header.get_secret_value().strip()
+    if not line:
+        return headers
+    name, _, value = line.partition(":")
+    name = name.strip()
+    out = {k: v for k, v in headers.items() if k.lower() != name.lower()}
+    out[name] = value.strip()
+    return out
+
+
 def _abort_error_response(verdict: StreamVerdict) -> Response:
     """Build the client-facing response for an aborted stream (loop/stall)."""
     route = route_for(verdict.kind)
@@ -561,6 +577,8 @@ class Proxy:
         }
 
         headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP_HEADERS}
+        # Added after `base_entry` is built so the secret is never recorded.
+        headers = _with_upstream_auth(headers)
         if overflow_changes:
             # The body was rewritten, so any inbound Content-Length is stale;
             # let httpx recompute it from the actual body (see the streaming

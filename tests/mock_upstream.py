@@ -13,7 +13,8 @@ serves a response spec. Three spec shapes are supported:
 * ``{"status": int, "content_type": str, "body": bytes}`` — a fixed HTTP reply
   (used by the context-window error tests).
 
-Every request body is captured on :attr:`MockUpstream.requests`.
+Every request body is captured on :attr:`MockUpstream.requests` and its headers
+on :attr:`MockUpstream.request_headers`.
 """
 
 import json
@@ -79,6 +80,7 @@ class _Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length) if length else b""
         upstream.requests.append(body)
+        upstream.request_headers.append({k.lower(): v for k, v in self.headers.items()})
         spec = upstream.spec_for(len(upstream.requests) - 1)
 
         if "chunks" in spec:
@@ -125,6 +127,7 @@ class MockUpstream:
     def __init__(self, specs):
         self.specs = specs
         self.requests = []  # raw request bodies, one per POST, in order
+        self.request_headers = []  # lower-cased header dicts, parallel to `requests`
         self.server = HTTPServer(("127.0.0.1", 0), _Handler)
         _Handler.upstream = self
         self.port = self.server.server_address[1]

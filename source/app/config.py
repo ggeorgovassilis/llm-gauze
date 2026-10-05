@@ -9,7 +9,7 @@ rather than editing those files by hand.
 
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +38,8 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # Validation errors must not echo input values (LLM_BEARER_HEADER is a secret).
+        hide_input_in_errors=True,
     )
 
     # Upstream local LLM provider (OpenAI-compatible API).
@@ -47,6 +49,30 @@ class Settings(BaseSettings):
         "Upstream & gateway",
         min_length=1,
     )
+
+    # Complete header line sent on every upstream request, e.g.
+    # "Authorization: Bearer <token>". A secret: kept as SecretStr so it never
+    # shows up in repr/model_dump, logs, or validation errors.
+    llm_bearer_header: SecretStr = _field(
+        SecretStr(""),
+        "Optional header line sent on every upstream request, e.g. "
+        "`Authorization: Bearer <token>` (the full line, not just the token). "
+        "This is a secret: keep it out of version control. Unset or empty sends no header.",
+        "Upstream & gateway",
+    )
+
+    @field_validator("llm_bearer_header")
+    @classmethod
+    def _validate_bearer_header(cls, value: SecretStr) -> SecretStr:
+        line = value.get_secret_value().strip()
+        if not line:
+            return SecretStr("")
+        name, sep, header_value = line.partition(":")
+        if not sep or not name.strip() or not header_value.strip():
+            raise ValueError("LLM_BEARER_HEADER must be a full header line: 'Name: value'")
+        if "\r" in line or "\n" in line:
+            raise ValueError("LLM_BEARER_HEADER must be a single line")
+        return SecretStr(line)
 
     # Upstream read/write timeout, in seconds (how long to wait for a
     # response once connected — generation can be slow).

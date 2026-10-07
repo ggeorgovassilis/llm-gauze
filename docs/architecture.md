@@ -27,7 +27,10 @@ client ──▶ gateway (FastAPI) ──▶ recorder (JSONL)
 - `app/main.py` — FastAPI app + routing (OpenAI-compatible surface).
 - `app/proxy.py` — forwarding seam; records each attempt and delegates
   failure handling to the remediation pipeline. Uses `httpx.Timeout` with
-  separate `connect`/`pool` and `read`/`write` values.
+  separate `connect`/`pool` and `read`/`write` values. The client's
+  `Authorization` header is copied unchanged to every upstream request
+  (buffered, streaming, retried); none is sent if the client sent none. Its
+  value is redacted from debug logs and recorded `request_headers`.
 - `app/recorder.py` — append-only JSONL recording of exchanges/attempts. The
   stabilised record field contract is documented in
   [`record-schema.md`](record-schema.md).

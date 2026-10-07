@@ -37,6 +37,7 @@ class StreamOutcome:
     status: int | None = None
     resp_headers: dict = field(default_factory=dict)
     error_body: bytes = b""
+    invalid_response: bool = False
     content: str = ""
     reasoning: str = ""
     tool_calls: list = field(default_factory=list)
@@ -163,6 +164,7 @@ class StreamingPipeline:
         )
         stall = StallDetector.from_settings() if settings.stall_detection_enabled else None
 
+        seen_choices = False
         lines = upstream.aiter_lines()
         while True:
             # Bound each read by the stall budget. Keepalive/comment lines
@@ -194,6 +196,17 @@ class StreamingPipeline:
                 chunk = json.loads(payload)
             except json.JSONDecodeError:
                 continue
+
+            if not isinstance(chunk, dict):
+                continue
+            if chunk.get("error") is not None:
+                outcome.status = 502
+                outcome.invalid_response = True
+                outcome.error_body = json.dumps(chunk).encode("utf-8")
+                outcome.resp_headers = {"content-type": "application/json"}
+                return
+            if chunk.get("choices"):
+                seen_choices = True
 
             delta_content, delta_reasoning, delta_tool_calls, chunk_meta = _extract_stream_chunk(
                 chunk
@@ -247,6 +260,21 @@ class StreamingPipeline:
                     outcome.verdict = verdict
                     outcome.verdict_stream = "reasoning"
                     return
+
+        if not seen_choices:
+            outcome.status = 502
+            outcome.invalid_response = True
+            outcome.resp_headers = {"content-type": "application/json"}
+            outcome.error_body = json.dumps(
+                {
+                    "error": {
+                        "type": "upstream_protocol_error",
+                        "code": "invalid_upstream_response",
+                        "message": "Upstream returned no chat completion choices; check the API URL and streaming support.",
+                    }
+                }
+            ).encode("utf-8")
+            return
 
         # End of stream: run the trailing-text check, then the terminal
         # ``finish_reason == "length"`` classification.

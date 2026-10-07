@@ -37,6 +37,27 @@ The gateway listens on `http://localhost:9317` and exposes an
 OpenAI-compatible API (e.g. `POST /v1/chat/completions`), forwarding to the
 `LLM_BASE_URL` in `.env`.
 
+### Provider API paths
+
+The gateway appends the client's request path to `LLM_BASE_URL`. For Hetzner
+Inference, set `LLM_BASE_URL=https://inference.hetzner.com/api` and point a
+chat-completions client at `http://localhost:9317` so `/v1/chat/completions`
+reaches `/api/v1/chat/completions` upstream. Do not include `/v1` twice or use
+the provider's website root as the API base.
+
+For VS Code Copilot custom endpoints, explicitly select
+`apiType: "chat-completions"` for both the direct provider and gateway entries.
+The direct entry's URL is `https://inference.hetzner.com/api/v1`; the gateway
+entry's URL is `http://localhost:9317`. Supply the provider's bearer token in
+the client's `Authorization` request header; the gateway forwards it unchanged.
+Never put credentials in committed configuration.
+
+An upstream HTTP 200 without completion choices is not a successful model
+reply. With streaming remediation enabled, the gateway reports HTTP 502 with
+`invalid_upstream_response` rather than fabricating a completion or an empty
+SSE success. Check the upstream API path and streaming support first. Upstream
+HTTP errors retain their status and body.
+
 ### File ownership
 
 The container runs as your host user (`UID`/`GID`, default `1000`) so the

@@ -196,6 +196,12 @@ def _run_forward(loop_enabled, content, enabled=True):
         with settings_override(
             llm_base_url=mock.url,
             loop_detection_enabled=loop_enabled,
+            stall_detection_enabled=False,
+            runaway_reasoning_enabled=False,
+            think_cleanup_enabled=False,
+            think_nudge_enabled=False,
+            coast_detection_enabled=False,
+            tool_call_guard_enabled=False,
             message_overflow_enabled=enabled,
             message_overflow_threshold=10,
             message_overflow_truncate=True,
@@ -232,6 +238,7 @@ def _run_forward(loop_enabled, content, enabled=True):
 def test_buffered_forward_truncates_before_upstream():
     resp, records, captured = _run_forward(False, "first line\n" + "x" * 1000)
     assert resp.status_code == 200, (resp.status_code, resp.body)
+    assert "stream" not in captured
     tool_content = captured["messages"][1]["content"]
     assert tool_content == f"{_WARNING}\nfirst line", tool_content
     final = records[-1]

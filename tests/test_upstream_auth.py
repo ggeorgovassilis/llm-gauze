@@ -71,6 +71,32 @@ def test_streaming_request_carries_header(tmp_path):
     assert _auth_values(mock) == [AUTH]
 
 
+@pytest.mark.parametrize("base_path", ["/api", "/api/"])
+@pytest.mark.parametrize("stream", [False, True])
+def test_chat_completion_preserves_api_prefix_and_auth(tmp_path, base_path, stream):
+    async def run():
+        with MockUpstream([_STREAM_OK]) as upstream:
+            with settings_override(
+                llm_base_url=upstream.url + base_path,
+                loop_detection_enabled=True,
+            ):
+                proxy = Proxy(Recorder(tmp_path / "r.jsonl"))
+                try:
+                    request = await make_request(
+                        json.dumps({"model": "test", "messages": [], "stream": stream}).encode(),
+                        headers={"Authorization": AUTH},
+                    )
+                    response = await proxy.forward(request, "v1/chat/completions")
+                finally:
+                    await proxy.aclose()
+            assert response.status_code == 200, response.body
+            assert upstream.request_paths == ["/api/v1/chat/completions"]
+            assert _auth_values(upstream) == [AUTH]
+            assert upstream.json_bodies()[0]["stream"] is True
+
+    asyncio.run(run())
+
+
 def test_retried_buffered_requests_carry_header(tmp_path):
     resp, mock = _forward([_FAIL, _OK], tmp_path / "r.jsonl")
     assert resp.status_code == 200

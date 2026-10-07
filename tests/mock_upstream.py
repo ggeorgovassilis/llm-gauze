@@ -83,6 +83,7 @@ class _Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length) if length else b""
         upstream.requests.append(body)
+        upstream.request_paths.append(self.path)
         upstream.request_headers.append({k.lower(): v for k, v in self.headers.items()})
         spec = upstream.spec_for(len(upstream.requests) - 1)
 
@@ -130,6 +131,7 @@ class MockUpstream:
     def __init__(self, specs):
         self.specs = specs
         self.requests = []  # raw request bodies, one per POST, in order
+        self.request_paths = []
         self.request_headers = []  # lower-cased header dicts, parallel to `requests`
         self.server = HTTPServer(("127.0.0.1", 0), _Handler)
         _Handler.upstream = self

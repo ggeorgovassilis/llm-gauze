@@ -45,18 +45,45 @@ chat-completions client at `http://localhost:9317` so `/v1/chat/completions`
 reaches `/api/v1/chat/completions` upstream. Do not include `/v1` twice or use
 the provider's website root as the API base.
 
+After changing `.env`, recreate the service; restarting an existing container
+does not reload its environment:
+
+```bash
+docker compose up -d --force-recreate gateway
+```
+
+For local development, use
+`docker compose -f docker-compose.dev.yml up -d --build --force-recreate gateway`.
+Check `/health` afterwards: its `upstream` must show the intended API base,
+including `/api` for Hetzner. Rebuilding an image alone does not correct a
+wrong value in `.env`.
+
 For VS Code Copilot custom endpoints, explicitly select
-`apiType: "chat-completions"` for both the direct provider and gateway entries.
+provider-level `apiType: "chat-completions"` for both the direct provider and
+gateway entries.
 The direct entry's URL is `https://inference.hetzner.com/api/v1`; the gateway
 entry's URL is `http://localhost:9317`. Supply the provider's bearer token in
 the client's `Authorization` request header; the gateway forwards it unchanged.
 Never put credentials in committed configuration.
+
+The current Copilot `customendpoint` implementation gives an explicit
+`Authorization` request header precedence over its provider API key. Without
+that header, the provider API key must be the real token, not a placeholder.
 
 An upstream HTTP 200 without completion choices is not a successful model
 reply. With streaming remediation enabled, the gateway reports HTTP 502 with
 `invalid_upstream_response` rather than fabricating a completion or an empty
 SSE success. Check the upstream API path and streaming support first. Upstream
 HTTP errors retain their status and body.
+
+If authenticated generation still times out, compare the same small request
+directly against the provider. Record time to response headers and first SSE
+data separately from total duration: no response headers is not evidence of
+ongoing reasoning. Authenticated `/models` discovery proves API reachability
+and token acceptance, but not model readiness. A successful completion from
+another advertised model with the same token helps isolate a model-specific
+provider failure; report that comparison to the provider rather than silently
+changing models or treating a gateway health check as successful generation.
 
 ### File ownership
 

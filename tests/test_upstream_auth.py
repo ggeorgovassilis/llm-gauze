@@ -97,6 +97,102 @@ def test_chat_completion_preserves_api_prefix_and_auth(tmp_path, base_path, stre
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("user_messages,body_bytes", [(2, 49158), (6, 76621), (7, 82895)])
+@pytest.mark.parametrize("valid_stream", [False, True])
+def test_copilot_recorded_request_shape(tmp_path, user_messages, body_bytes, valid_stream):
+    payload = {
+        "model": "Qwen3.8-27B",
+        "messages": [
+            {"role": "system", "content": ""},
+            *[{"role": "user", "content": "Synthetic request"} for _ in range(user_messages)],
+            *[
+                {"role": "assistant", "content": "Synthetic reply"}
+                for _ in range(0 if user_messages == 2 else 2)
+            ],
+        ],
+        "temperature": 0.1,
+        "top_p": 1,
+        "stream": True,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": f"synthetic_tool_{index}",
+                    "description": "Synthetic tool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+            for index in range(22)
+        ],
+        "n": 1,
+        "stream_options": {"include_usage": True},
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    payload["messages"][0]["content"] = "s" * (body_bytes - len(body))
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    assert len(body) == body_bytes
+    spec = (
+        _STREAM_OK
+        if valid_stream
+        else {"status": 200, "content_type": "application/octet-stream", "body": b"No route."}
+    )
+    record_path = tmp_path / "r.jsonl"
+
+    async def run():
+        with MockUpstream([spec]) as upstream:
+            with settings_override(
+                llm_base_url=upstream.url + ("/api" if valid_stream else ""),
+                think_cleanup_enabled=True,
+                retry_max_attempts=3,
+            ):
+                proxy = Proxy(Recorder(record_path))
+                try:
+                    response = await proxy.forward(
+                        await make_request(
+                            body,
+                            headers={
+                                "Authorization": AUTH,
+                                "Content-Length": str(len(body)),
+                                "User-Agent": "GitHubCopilotChat/0.68.0",
+                                "X-Request-ID": "965718d1-727e-453c-a8c3-0c7f69aedd56",
+                            },
+                        ),
+                        "v1/chat/completions",
+                    )
+                finally:
+                    await proxy.aclose()
+            assert upstream.request_count == 1
+            assert upstream.request_paths == [
+                "/api/v1/chat/completions" if valid_stream else "/v1/chat/completions"
+            ]
+            assert upstream.json_bodies() == [payload]
+            assert int(upstream.request_headers[0]["content-length"]) == len(upstream.requests[0])
+            assert _auth_values(upstream) == [AUTH]
+        assert response.status_code == (200 if valid_stream else 502)
+        if valid_stream:
+            assert b"hello" in response.body
+            assert response.body.endswith(b"data: [DONE]\n\n")
+        else:
+            assert json.loads(response.body)["error"]["code"] == "invalid_upstream_response"
+        records = [json.loads(line) for line in record_path.read_text().splitlines()]
+        assert len(records) == 1
+        if valid_stream:
+            assert (
+                json.loads(records[0]["response_body"])["choices"][0]["message"]["content"]
+                == "hello"
+            )
+            assert records[0]["streamed"] is True
+        else:
+            assert records[0]["response_body"] == response.body.decode()
+        assert records[0]["request_headers"]["authorization"] == "[redacted]"
+        assert (
+            records[0]["request_headers"]["x-request-id"] == "965718d1-727e-453c-a8c3-0c7f69aedd56"
+        )
+        assert len(records[0]["request_id"]) == 32
+
+    asyncio.run(run())
+
+
 def test_retried_buffered_requests_carry_header(tmp_path):
     resp, mock = _forward([_FAIL, _OK], tmp_path / "r.jsonl")
     assert resp.status_code == 200

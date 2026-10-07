@@ -76,6 +76,27 @@ reply. With streaming remediation enabled, the gateway reports HTTP 502 with
 SSE success. Check the upstream API path and streaming support first. Upstream
 HTTP errors retain their status and body.
 
+For an immediate VS Code 502, inspect `data/records.jsonl` structurally rather
+than dumping recordings or private conversations. Match the client's
+`x-request-id` in `request_headers` to the gateway's `request_id`, then compare
+the record timestamp and attempt `duration` with container completion logs.
+`GitHubCopilotChat` in the user agent distinguishes VS Code traffic from smoke
+probes. A recorded `invalid_upstream_response` is a gateway protocol rejection,
+not evidence that the provider returned HTTP 502: the rejected upstream status
+and content type are not retained in that record. Verify the running API base
+and compare a synthetic request directly when those details are needed.
+The Hetzner website-root route has returned HTTP 200 with nine non-SSE bytes
+and `application/octet-stream`, producing this immediate rejection even for
+a valid chat-completions request with tools.
+
+Temporary Compose overrides do not persist an `.env` correction. Before using
+the ordinary start command again, privately set the correct `LLM_BASE_URL`
+and recreate the gateway. A corrected route alone does not prove a model
+can complete the VS Code workflow. Compare the relevant request shape,
+including tools, message roles and `stream_options`, not just an OK-only curl.
+Use synthetic content and bounded time/output for live probes, and report any
+added token cap as a difference from the recorded request.
+
 If authenticated generation still times out, compare the same small request
 directly against the provider. Record time to response headers and first SSE
 data separately from total duration: no response headers is not evidence of

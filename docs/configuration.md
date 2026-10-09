@@ -108,6 +108,14 @@ below, grouped by feature, with its default.
 | `COAST_NUDGE_TEXT` | `You announced a tool call but did not make one. Call the tool now, or if the task is complete, say so explicitly.` | Re-prompt text appended as a user message on the re-submitted request. |
 | `COAST_MAX_ATTEMPTS` | `2` | Max coast re-submissions before returning the coasted turn as-is. |
 
+## Empty-stop detection
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `EMPTY_STOP_DETECTION_ENABLED` | `true` | Master switch for empty-stop detection. |
+| `EMPTY_STOP_NUDGE_TEXT` | `Your previous reply was empty. Produce a visible answer or call a tool; do not stop without either.` | Re-prompt text appended as a user message on the re-submitted request. |
+| `EMPTY_STOP_MAX_ATTEMPTS` | `2` | Max empty-stop re-submissions before falling back to the placeholder floor. |
+
 ## Runaway-reasoning detection
 
 | Variable | Default | Description |

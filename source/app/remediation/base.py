@@ -171,14 +171,16 @@ class Turn:
 
     A single, uniform view of a completed turn that a :class:`Remediation`
     step inspects: the finish reason, the visible content, the reasoning
-    stream, any tool calls, and (for abort-verdict steps) the content verdict
-    that aborted the stream.
+    stream, any tool calls, the upstream-reported token split (when available),
+    and (for abort-verdict steps) the content verdict that aborted the stream.
     """
 
     finish_reason: str | None = None
     content: str = ""
     reasoning: str = ""
     tool_calls: list = field(default_factory=list)
+    reasoning_tokens: int | None = None
+    text_tokens: int | None = None
     verdict: StreamVerdict | None = None
 
 

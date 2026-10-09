@@ -19,7 +19,7 @@ tokens stay at zero**. Two windows observe it:
    with reasoning present but no content and no tool calls — the model burned
    its entire budget thinking.
 
-Remediation mirrors the nudge rung: re-submit with an explicit "stop thinking,
+Remediation mirrors the extraction rung: re-submit with an explicit "stop thinking,
 answer now" instruction, capped by a small attempt budget.
 
 Only the standard library is used, so both classes are pure and unit-testable

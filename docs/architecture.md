@@ -73,7 +73,7 @@ implements the one uniform protocol in `base.py`:
   step's own re-submission budget) are declared as class attributes.
 
 The ladder is assembled from enabled settings in `_build_remediation_ladder`
-as a plain ordered list — **runaway → loop_retry → nudge → coast** — and a
+as a plain ordered list — **runaway → loop_retry → extract → coast** — and a
 disabled rung is simply left out. After each exchange the proxy walks the
 ladder in order and re-submits via the first rung whose `applies` fires; when
 no rung fires the outcome is final. A new remediation is therefore "implement
@@ -96,8 +96,9 @@ rewrites a value and reports its mutations, never re-submitting.
 - `app/remediation/overflow.py` — `MessageOverflowGuard`, a request-side
   *transform* that warns/truncates oversized tool results (distinct from
   `context.py`'s response-side `ContextWindowDetector`).
-- `app/remediation/nudge.py` — `NudgePolicy`, re-prompt a turn that finished
-  empty (reasoning only, no content, no tool calls).
+- `app/remediation/extract.py` — `ExtractionPolicy`, recover a visible answer
+  from a turn that finished empty (reasoning only, no content, no tool calls)
+  by paging through the reasoning via the `gauze_read` tool.
 - `app/remediation/coast.py` — `CoastPolicy`, re-prompt a turn that announced
   a tool call but did not make one.
 - `app/remediation/runaway.py` — `RunawayReasoningDetector` /
@@ -241,7 +242,7 @@ Copilot's agentic flow.
 
 Think-tag cleanup is therefore a **content transform** (not a failure
 `Detector`): it rewrites the assembled completion rather than classifying it.
-It is split into two steps so the nudge rung (below) can sit between them:
+It is split into two steps so the extraction rung (below) can sit between them:
 
 - `ThinkContentGuard.relocate(content, reasoning)` **relocates** the inner text
   of any leaked thinking tag out of `content` and appends it to `reasoning` —
@@ -262,36 +263,51 @@ It is split into two steps so the nudge rung (below) can sit between them:
   `stream: true` client whose output was changed, the SSE stream is rebuilt
   from the cleaned values; untouched streams are passed through verbatim.
 
-## Nudge (re-prompt empty-text turns)
+## Extraction (recover answers from reasoning-only turns)
 
 The placeholder above only guarantees a *non-empty* turn — it does not recover
 the answer the model was heading toward. A turn that finished with
 `finish_reason: stop`, no visible `content`, no `tool_calls`, but non-empty
-`reasoning` is instead re-submitted once with a short nudge re-prompt, giving
-the model a second chance to surface real output. This is the first rung of the
-empty-response ladder (`nudge → extract → placeholder floor`).
+`reasoning` is instead re-submitted so the model can page through its own
+chain-of-thought and surface real output. This is the first rung of the
+empty-response ladder (`extract → placeholder floor`).
 
-- `NudgePolicy.should_nudge(finish_reason, content, tool_calls, reasoning)` is a
-  pure predicate over the *relocated* turn: stop + empty content + no tool
-  calls + non-empty reasoning. Deterministic — no heuristics.
-- `NudgePolicy.apply(turn, body)` appends `{"role": "user", "content": <nudge>}`
-  to a copy of the request (the nudge text is `THINK_NUDGE_TEXT`) without
-  mutating the input. Its ladder trigger is `applies(turn, body)`, which
-  forwards the assembled turn to `should_nudge`.
+Rather than re-feeding the full reasoning stream (which could be enormous) as
+context, the policy injects a namespaced read tool, `gauze_read`, and a short
+instruction that asks the model to page through the relocated reasoning in
+bounded windows. The state machine has two modes:
+
+- **Seed** — fired when a turn matches the empty-reasoning-only shape. The
+  policy appends a system message defining the `gauze_read` tool
+  (`resource`, `line_from`, `line_count`) and a user turn carrying the
+  `EXTRACT_INSTRUCTION`. The captured reasoning is held in policy state and is
+  *never* embedded in the request body.
+- **Read-exec** — fired when the model answers with a `gauze_read` tool call.
+  The policy reads the requested line window from its held resource and
+  appends the slice as the tool result; foreign or mixed tool calls are passed
+  through untouched. The model eventually produces a visible answer (or the
+  budget is spent and the placeholder floor applies).
+
+- `ExtractionPolicy.applies(turn, body)` dispatches to the seed predicate
+  (stop + empty content + no tool calls + non-empty reasoning, with no resource
+  yet held) or the read-exec predicate (a held resource and a turn whose tool
+  calls are *exclusively* `gauze_read`). Deterministic — no heuristics.
+- `ExtractionPolicy.apply(turn, body)` mutates a *copy* of the request; the
+  input is never modified.
 - The re-submitted request reuses the streaming path unchanged; the budget is
-  `THINK_NUDGE_MAX_ATTEMPTS`, and each nudge pass is recorded with an
-  `outcome` (`triggered`, `succeeded`, or `exhausted`) so the intervention is
-  visible in `records.jsonl`.
+  `EXTRACT_MAX_ATTEMPTS`, and each extraction pass is recorded with an
+  `outcome` (`triggered`, `succeeded`, or `exhausted`) plus the resource shape
+  and read arguments, so the intervention is visible in `records.jsonl`.
 - On exhaustion the placeholder floor (`guard_empty`) is applied as before, so
-  the client still receives a non-empty turn.
+  the client still receives a non-empty turn, and an `extract_aborts_total`
+  counter is incremented.
 
-Extracting a *usable answer* from the relocated chain-of-thought is deliberately
-out of scope here (see #13): it is not deterministically fixable, and surfacing
-raw reasoning as content would be a quality regression.
+The namespaced `gauze_read` tool is defined but never exposed to the upstream
+model's own tool routing: only the extraction rung references it.
 
 ## Coast detection
 
-A sibling of the nudge rung above, but for the *opposite* shape of turn: the
+A sibling of the extraction rung above, but for the *opposite* shape of turn: the
 model announced work and then did none. Mid-way through a multi-step tool loop,
 some models end a turn with `finish_reason: stop`, non-empty visible `content`,
 and no `tool_calls` — even though the request's `tools` list was non-empty and
@@ -301,7 +317,7 @@ next chunk.") without actually generating the call. Copilot's agent loop only
 continues while the assistant emits tool calls, so such a turn ends the
 workflow silently — no error, no crash, no user indication (see #16).
 
-Where nudge fires on *empty* turns, coast fires on *non-empty* turns whose
+Where extraction fires on *empty* turns, coast fires on *non-empty* turns whose
 chain-of-thought collapsed to be byte-identical with the visible content — the
 deterministic "coasting" fingerprint observed in the incident.
 
@@ -312,7 +328,7 @@ deterministic "coasting" fingerprint observed in the incident.
   — no heuristics.
 - `CoastPolicy.apply(turn, body)` replays the coasted assistant message (from
   `turn.content`) into the conversation and appends the re-prompt
-  (`COAST_NUDGE_TEXT`). Unlike nudge (whose empty turn left nothing in
+  (`COAST_NUDGE_TEXT`). Unlike extraction (whose empty turn left nothing in
   context), the coasted message is replayed so the re-prompt refers to
   something the model actually said. Its ladder trigger is
   `applies(turn, body)`, forwarding to `should_nudge`.
@@ -350,7 +366,7 @@ tokens stay at zero**. Two windows observe it:
    with reasoning present but no content and no tool calls: the model burned
    its entire budget thinking.
 
-Remediation mirrors the nudge rung: `RunawayReasoningPolicy.apply(turn, body)`
+Remediation mirrors the extraction rung: `RunawayReasoningPolicy.apply(turn, body)`
 appends a stop-thinking instruction (`RUNAWAY_REASONING_NUDGE_TEXT`) and
 re-submits, capped by `RUNAWAY_REASONING_MAX_ATTEMPTS`. Its ladder trigger
 `applies(turn, body)` fires on a `runaway_reasoning` verdict. On exhaustion the
@@ -486,6 +502,6 @@ JSONL store is the shared substrate every subsequent phase reads from.
    backoff, separated into collection/understanding/action. ✅
 3. **Detection** — analyse recorded exchanges, classify further failures. ✅
 4. **Remediation** — loop/context/message-overflow/coast/runaway detection and
-   the nudge/think-cleanup/tool-repair transforms. ✅
+   the extraction/think-cleanup/tool-repair transforms. ✅
 5. **Streaming** — SSE pass-through, per-chunk handling, and rebuilt streams
    after a transform. ✅

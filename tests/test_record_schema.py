@@ -4,7 +4,7 @@ Every recorded exchange must carry a stable ``outcome`` discriminator drawn
 from the same vocabulary telemetry already emits on ``requests_total``, and
 ``response_body`` must mean exactly one thing: the body actually delivered to
 the client, or ``null`` when nothing was delivered. The pre-remediation turn
-that used to be written into ``response_body`` on the nudge/coast pass records
+that used to be written into ``response_body`` on the extract/coast pass records
 now lives in ``pre_remediation_body``.
 
 These tests cover:
@@ -13,7 +13,7 @@ These tests cover:
 * the buffered ``forward`` path (success / http_error / upstream_failure, and
   the retried attempt discarding its body);
 * the streaming verdict-abort record;
-* the nudge/coast remediation-pass records;
+* the extract/coast remediation-pass records;
 * the runaway/loop-retry remediation-pass records.
 
 Run via the test wrapper (``./scripts/test.sh tests/test_record_schema.py``):
@@ -211,10 +211,10 @@ def test_streaming_abort_record_has_verdict_outcome(tmp_path):
     assert aborts[0]["response_body"] is None, aborts[0]
 
 
-# --- nudge / coast remediation-pass records ---------------------------
+# --- extract / coast remediation-pass records ---------------------------
 
 
-def test_nudge_pass_moves_turn_to_pre_remediation_body(tmp_path):
+def test_extract_pass_moves_turn_to_pre_remediation_body(tmp_path):
     empty = [
         _chunk({"role": "assistant", "reasoning_content": "thinking hard"}),
         _chunk({}, finish_reason="stop"),
@@ -223,16 +223,16 @@ def test_nudge_pass_moves_turn_to_pre_remediation_body(tmp_path):
         _chunk({"role": "assistant", "content": "the real answer"}),
         _chunk({}, finish_reason="stop"),
     ]
-    record_path = tmp_path / "record_schema_nudge.jsonl"
+    record_path = tmp_path / "record_schema_extract.jsonl"
     with MockUpstream([{"chunks": empty}, {"chunks": answer}]) as mock:
         with settings_override(
             llm_base_url=mock.url,
             loop_detection_enabled=True,
             think_cleanup_enabled=True,
             think_empty_response_placeholder="PLACEHOLDER",
-            think_nudge_enabled=True,
-            think_nudge_text="PLEASE_REPLY_VISIBLY",
-            think_nudge_max_attempts=2,
+            extract_enabled=True,
+            extract_instruction="PLEASE_PAGE_AND_ANSWER",
+            extract_max_attempts=2,
         ):
             recorder = Recorder(record_path)
             proxy = Proxy(recorder)
@@ -242,14 +242,14 @@ def test_nudge_pass_moves_turn_to_pre_remediation_body(tmp_path):
 
             async def run():
                 return await proxy._forward_streaming(
-                    request_id="schema-nudge",
+                    request_id="schema-extract",
                     method="POST",
                     url="/v1/chat/completions",
                     query="",
                     body=body,
                     headers={"content-type": "application/json"},
                     base_entry={
-                        "request_id": "schema-nudge",
+                        "request_id": "schema-extract",
                         "method": "POST",
                         "path": "/v1/chat/completions",
                     },
@@ -258,13 +258,14 @@ def test_nudge_pass_moves_turn_to_pre_remediation_body(tmp_path):
             asyncio.run(run())
 
     records = _read_records(record_path)
-    triggered = [r for r in records if r.get("nudge", {}).get("outcome") == "triggered"]
+    triggered = [r for r in records if r.get("extract", {}).get("outcome") == "triggered"]
     assert len(triggered) == 1, records
     # The re-submitted (discarded) turn moved to `pre_remediation_body`;
     # `response_body` is null because nothing was delivered to the client.
     assert triggered[0]["outcome"] == "success", triggered[0]
     assert triggered[0]["response_body"] is None, triggered[0]
     assert "reasoning_content" in triggered[0]["pre_remediation_body"], triggered[0]
+    assert triggered[0]["extract"]["mode"] == "seed", triggered[0]
 
     # The final record carries the delivered body.
     final = records[-1]
@@ -329,7 +330,7 @@ def test_coast_pass_moves_turn_to_pre_remediation_body(tmp_path):
             llm_base_url=mock.url,
             loop_detection_enabled=True,
             think_cleanup_enabled=True,
-            think_nudge_enabled=False,
+            extract_enabled=False,
             coast_detection_enabled=True,
             coast_nudge_text="PLEASE_MAKE_THE_TOOL_CALL",
             coast_max_attempts=2,
@@ -388,7 +389,7 @@ def test_runaway_pass_records_runaway_outcome(tmp_path):
             llm_base_url=mock.url,
             loop_detection_enabled=True,
             think_cleanup_enabled=False,
-            think_nudge_enabled=False,
+            extract_enabled=False,
             coast_detection_enabled=False,
             loop_retry_enabled=False,
             runaway_reasoning_enabled=True,

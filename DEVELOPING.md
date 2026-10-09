@@ -86,7 +86,7 @@ Detection and remediation are separate, pluggable concerns — see
 - **Detectors** subclass the interfaces in `source/app/remediation/base.py`
   (`Detector` for buffered requests, `ContentWatchdog` for content streams) and
   classify a failure into a `Diagnosis`.
-- **Remediation** policies (`NudgePolicy`, `CoastPolicy`, `LoopRetryPolicy`, …)
+- **Remediation** policies (`ExtractionPolicy`, `CoastPolicy`, `LoopRetryPolicy`, …)
   turn a diagnosis into behaviour — a re-submission or a content transform.
 - Add any new configuration to `source/app/config.py` with a `description`,
   `section`, and validation constraints (ranges, enum-like status codes).

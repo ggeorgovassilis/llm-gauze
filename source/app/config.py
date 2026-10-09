@@ -396,29 +396,33 @@ class Settings(BaseSettings):
         "Think-tag cleanup",
     )
 
-    # --- Nudge (re-prompt empty-text turns) --------------------------
-    # Master switch for re-submitting a turn that produced only reasoning
-    # (finish_reason=stop, no content, no tool calls) with a short re-prompt.
-    think_nudge_enabled: bool = _field(
+    # --- Extraction (recover answer from think-only turns) -----------
+    # Master switch for the stateful extraction rung: a turn that produced
+    # only reasoning (finish_reason=stop, no content, no tool calls) seeds the
+    # reasoning as a resource and lets the model page through it via the
+    # namespaced ``gauze_read`` tool, rather than re-thinking from scratch.
+    extract_enabled: bool = _field(
         True,
-        "Master switch for re-prompting a turn that produced only reasoning.",
-        "Nudge (re-prompt empty turns)",
+        "Master switch for recovering a visible answer from a think-only turn.",
+        "Extraction (recover answer from think-only turns)",
     )
 
-    # Nudge text appended as a ``user`` message on the re-submitted request.
-    think_nudge_text: str = _field(
-        "Your previous reply contained no visible text and no tool call. "
-        "Reply with a visible answer, or call a tool if the task requires one.",
-        "Nudge text appended as a user message on the re-submitted request.",
-        "Nudge (re-prompt empty turns)",
+    # Instruction appended as a ``user`` message on the seeded re-submission.
+    extract_instruction: str = _field(
+        "Your previous reply contained only chain-of-thought reasoning and no "
+        "visible answer. Use the gauze_read tool to page through your reasoning "
+        "in bounded windows, then produce the final visible answer.",
+        "Instruction appended as a user message on the seeded re-submission.",
+        "Extraction (recover answer from think-only turns)",
     )
 
-    # Maximum number of nudge re-submissions before falling back to the
-    # placeholder floor (see ``think_empty_response_placeholder``).
-    think_nudge_max_attempts: int = _field(
-        2,
-        "Max nudge re-submissions before falling back to the placeholder floor.",
-        "Nudge (re-prompt empty turns)",
+    # Maximum number of extraction re-submissions (seed plus reads) before
+    # falling back to the placeholder floor (see
+    # ``think_empty_response_placeholder``).
+    extract_max_attempts: int = _field(
+        3,
+        "Max extraction re-submissions before falling back to the placeholder floor.",
+        "Extraction (recover answer from think-only turns)",
         ge=0,
     )
 

@@ -57,7 +57,7 @@ wrote it or which optional keys it carries.
   `null`, because that attempt's body was never delivered (it was discarded,
   failed, or re-submitted).
 
-The pre-remediation turn that a nudge or coast re-submission discards is **not**
+The pre-remediation turn that an extraction or coast re-submission discards is **not**
 written to `response_body`; it lives in `pre_remediation_body` (a string,
 decoded from the reconstructed turn) so both bodies stay distinguishable.
 
@@ -68,20 +68,20 @@ There are **two `outcome` keys**, which must not be confused:
 
 * The **top-level `outcome`** is the stable discriminator described above.
 * The **nested `*.outcome`** describes the nested step's own result and is
-  always `"triggered"` on a pass record (e.g. `nudge.outcome`,
+  always `"triggered"` on a pass record (e.g. `extract.outcome`,
   `coast.outcome`, `runaway.outcome`, `loop_retry.outcome`).
 
 The top-level `outcome` differs across the four rungs because the vocabulary
-has no nudge/coast term:
+has no extract/coast term:
 
-* `nudge` / `coast` passes stamp `outcome: "success"` — the turn was empty and
+* `extract` / `coast` passes stamp `outcome: "success"` — the turn was empty and
   the re-submission is the remediation, not an abort.
 * `runaway` passes stamp `outcome: "runaway_reasoning_aborted"`.
 * `loop_retry` passes stamp `outcome: "loop_aborted"`.
 
 The nested block on a remediation pass also carries the exact re-submitted
 request body for auditability (`runaway.resubmitted_body`,
-`loop_retry.resubmitted_body`) or the pass counters (`nudge`/`coast`).
+`loop_retry.resubmitted_body`) or the pass counters (`extract`/`coast`).
 
 ## Abort records
 

@@ -83,7 +83,7 @@ class ThinkContentGuard(Transform):
     def relocate(self, content: str, reasoning: str = "") -> tuple[str, str, list[dict]]:
         """Relocate leaked thinking tags only (no placeholder applied).
 
-        The nudge rung inspects the relocated turn to decide whether to
+        The extraction rung inspects the relocated turn to decide whether to
         re-submit; the placeholder floor is applied separately afterwards.
         """
         content = content or ""

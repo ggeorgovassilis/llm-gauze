@@ -3,8 +3,8 @@
 Historically ``Proxy.forward`` entered the streaming path only when
 ``loop_detection_enabled`` was true, so disabling loop detection to silence one
 false positive silently disabled every other streaming feature — stall
-detection, runaway-reasoning detection, nudge, coast, think-cleanup, and the
-tool-call guard — regardless of their own switches.
+detection, runaway-reasoning detection, extraction, coast, think-cleanup, and
+the tool-call guard — regardless of their own switches.
 
 These tests drive the real ``Proxy.forward`` (the gating decision, not
 ``_forward_streaming``) with ``loop_detection_enabled=False`` and a single
@@ -36,7 +36,7 @@ def _run_forward(specs, *, body=None, **overrides):
         "stall_detection_enabled": False,
         "runaway_reasoning_enabled": False,
         "think_cleanup_enabled": False,
-        "think_nudge_enabled": False,
+        "extract_enabled": False,
         "coast_detection_enabled": False,
         "loop_retry_enabled": False,
         "tool_call_guard_enabled": False,
@@ -65,7 +65,7 @@ def test_streaming_feature_enabled_matches_each_switch():
         "loop_detection_enabled",
         "stall_detection_enabled",
         "runaway_reasoning_enabled",
-        "think_nudge_enabled",
+        "extract_enabled",
         "coast_detection_enabled",
         "think_cleanup_enabled",
         "tool_call_guard_enabled",
@@ -112,7 +112,7 @@ def test_runaway_reasoning_fires_without_loop_detection():
     assert json.loads(resp.body)["error"]["type"] == "runaway_reasoning_detected"
 
 
-def test_nudge_fires_without_loop_detection():
+def test_extract_fires_without_loop_detection():
     empty_turn = [
         _chunk({"role": "assistant", "reasoning_content": "thinking hard"}),
         _chunk({}, finish_reason="stop"),
@@ -123,13 +123,13 @@ def test_nudge_fires_without_loop_detection():
     ]
     resp, count = _run_forward(
         [{"chunks": empty_turn}, {"chunks": answer_turn}],
-        think_nudge_enabled=True,
-        think_nudge_max_attempts=2,
+        extract_enabled=True,
+        extract_max_attempts=2,
     )
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     assert data["choices"][0]["message"]["content"] == "the real answer"
-    # Two upstream requests: the empty turn and the nudged retry.
+    # Two upstream requests: the empty turn and the extraction retry.
     assert count == 2, count
 
 

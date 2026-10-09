@@ -136,8 +136,8 @@ def test_tool_call_turn_still_relocates_leaked_tag():
 
 
 def test_relocate_does_not_apply_placeholder():
-    # The nudge rung needs the relocated turn *before* the placeholder floor,
-    # so `relocate` must leave empty content empty.
+    # The extraction rung needs the relocated turn *before* the placeholder
+    # floor, so `relocate` must leave empty content empty.
     content, reasoning, changes = _guard().relocate("<think>x</think>")
     assert content == "", repr(content)
     assert reasoning == "x", repr(reasoning)

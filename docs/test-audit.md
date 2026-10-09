@@ -23,7 +23,7 @@ coverage** (1157 statements, 126 missed, 117 tests, ~20s).
 | `overflow.py` | 93% | warn-only / `truncate=False` path |
 | `loop.py` | 95% | two lines |
 | `tool_call.py` | 91% | six lines |
-| `config.py`, `recorder.py`, `coast.py`, `loop_retry.py`, `nudge.py`, `runaway.py`, `stall.py`, `think.py`, `__init__.py` | 100% | |
+| `config.py`, `recorder.py`, `coast.py`, `loop_retry.py`, `extract.py`, `runaway.py`, `stall.py`, `think.py`, `__init__.py` | 100% | |
 
 ## Findings
 
@@ -61,7 +61,7 @@ failure to a client-facing status; an untested mapping there is exactly the
 ### F4 — Integration scaffolding duplicated across nine files (medium risk)
 
 Nine files (`test_coast.py`, `test_context_window.py`, `test_loop_integration.py`,
-`test_nudge.py`, `test_overflow.py`, `test_runaway.py`, `test_stall_integration.py`,
+`test_extract.py`, `test_overflow.py`, `test_runaway.py`, `test_stall_integration.py`,
 `test_think_cleanup.py`, `test_tool_call.py`) each re-implement the same
 scaffolding: a `_chunk` helper, a `_MockHandler`/`_MockServer` pair over
 `http.server`, and a `_run_forward` driver. Roughly 200 lines of near-identical

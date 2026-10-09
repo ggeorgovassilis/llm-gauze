@@ -92,13 +92,13 @@ below, grouped by feature, with its default.
 | `THINK_TAGS` | `think,thinking,reasoning` | Comma-separated tag names (case-insensitive) whose inner text is relocated into reasoning_content. |
 | `THINK_EMPTY_RESPONSE_PLACEHOLDER` | `The model replied inside a thinking tag; see reasoning_content.` | Placeholder emitted as visible content when the model produced only a thinking tag. |
 
-## Nudge (re-prompt empty turns)
+## Extraction (recover answer from think-only turns)
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `THINK_NUDGE_ENABLED` | `true` | Master switch for re-prompting a turn that produced only reasoning. |
-| `THINK_NUDGE_TEXT` | `Your previous reply contained no visible text and no tool call. Reply with a visible answer, or call a tool if the task requires one.` | Nudge text appended as a user message on the re-submitted request. |
-| `THINK_NUDGE_MAX_ATTEMPTS` | `2` | Max nudge re-submissions before falling back to the placeholder floor. |
+| `EXTRACT_ENABLED` | `true` | Master switch for recovering a visible answer from a think-only turn. |
+| `EXTRACT_INSTRUCTION` | `Your previous reply contained only chain-of-thought reasoning and no visible answer. Use the gauze_read tool to page through your reasoning in bounded windows, then produce the final visible answer.` | Instruction appended as a user message on the seeded re-submission. |
+| `EXTRACT_MAX_ATTEMPTS` | `3` | Max extraction re-submissions before falling back to the placeholder floor. |
 
 ## Coast detection
 

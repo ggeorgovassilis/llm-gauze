@@ -26,8 +26,8 @@ from app.remediation.base import (
 )
 from app.remediation.coast import CoastPolicy
 from app.remediation.context import CONTEXT_WINDOW_CODE, ContextWindowDetector
+from app.remediation.extract import ExtractionPolicy
 from app.remediation.loop import ThinkingLoopDetector
-from app.remediation.nudge import NudgePolicy
 from app.remediation.overflow import MessageOverflowGuard
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.runaway import RunawayReasoningDetector, RunawayReasoningPolicy
@@ -54,7 +54,7 @@ __all__ = [
     "ContextWindowDetector",
     "CONTEXT_WINDOW_CODE",
     "ThinkContentGuard",
-    "NudgePolicy",
+    "ExtractionPolicy",
     "CoastPolicy",
     "MessageOverflowGuard",
     "RunawayReasoningDetector",

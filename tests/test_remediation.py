@@ -5,7 +5,7 @@ These tests pin the new contract introduced by #88:
 * every re-submission policy implements the :class:`Remediation` protocol;
 * every content/body guard implements the :class:`Transform` protocol;
 * the ladder is an ordered, composable list of steps driven uniformly;
-* two rungs (nudge, then coast) compose on one request, in ladder order.
+* two rungs (extract, then coast) compose on one request, in ladder order.
 """
 
 import asyncio
@@ -15,15 +15,15 @@ from app.proxy import Proxy, _find_step, _first_applicable_step, _remediation_ou
 from app.recorder import Recorder
 from app.remediation.base import Remediation, Transform, Turn
 from app.remediation.coast import CoastPolicy
+from app.remediation.extract import ExtractionPolicy
 from app.remediation.loop_retry import LoopRetryPolicy
-from app.remediation.nudge import NudgePolicy
 from app.remediation.overflow import MessageOverflowGuard
 from app.remediation.runaway import RunawayReasoningPolicy
 from app.remediation.think import ThinkContentGuard
 from app.remediation.tool_call import ToolCallGuard
 from mock_upstream import MockUpstream, chunk, settings_override
 
-_NUDGE = "PLEASE_REPLY_VISIBLY"
+_INSTRUCTION = "PLEASE_PAGE_AND_ANSWER"
 _COAST_TEXT = "PLEASE_MAKE_THE_TOOL_CALL"
 _COASTED_CONTENT = "Chunk 5 done: 12 products, 0 picks. Pulling next chunk."
 
@@ -35,7 +35,7 @@ _chunk = chunk
 
 def test_policies_implement_remediation_protocol():
     for cls, inst in (
-        (NudgePolicy, NudgePolicy.from_settings()),
+        (ExtractionPolicy, ExtractionPolicy.from_settings()),
         (CoastPolicy, CoastPolicy.from_settings()),
         (RunawayReasoningPolicy, RunawayReasoningPolicy.from_settings()),
         (LoopRetryPolicy, LoopRetryPolicy.from_settings()),
@@ -59,7 +59,7 @@ def test_transforms_implement_transform_protocol():
 
 def test_remediation_names_are_stable():
     # The recorder keys and attempt counters hang off these names.
-    assert NudgePolicy.from_settings().name == "nudge"
+    assert ExtractionPolicy.from_settings().name == "extract"
     assert CoastPolicy.from_settings().name == "coast"
     assert RunawayReasoningPolicy.from_settings().name == "runaway"
     assert LoopRetryPolicy.from_settings().name == "loop_retry"
@@ -73,11 +73,11 @@ def test_ladder_ordering():
     with settings_override(
         runaway_reasoning_enabled=True,
         loop_retry_enabled=True,
-        think_nudge_enabled=True,
+        extract_enabled=True,
         coast_detection_enabled=True,
     ):
         ladder = proxy._build_remediation_ladder()
-    assert [step.name for step in ladder] == ["runaway", "loop_retry", "nudge", "coast"]
+    assert [step.name for step in ladder] == ["runaway", "loop_retry", "extract", "coast"]
 
 
 def test_ladder_omits_disabled_rungs():
@@ -85,7 +85,7 @@ def test_ladder_omits_disabled_rungs():
     with settings_override(
         runaway_reasoning_enabled=False,
         loop_retry_enabled=False,
-        think_nudge_enabled=False,
+        extract_enabled=False,
         coast_detection_enabled=False,
     ):
         assert proxy._build_remediation_ladder() == []
@@ -93,20 +93,20 @@ def test_ladder_omits_disabled_rungs():
 
 def test_first_applicable_step_picks_first_match_in_order():
     ladder = [
-        NudgePolicy(text=_NUDGE, max_attempts=2),
+        ExtractionPolicy(instruction=_INSTRUCTION, max_attempts=2),
         CoastPolicy(text=_COAST_TEXT, max_attempts=2),
     ]
-    attempts = {"nudge": 0, "coast": 0}
+    attempts = {"extract": 0, "coast": 0}
     turn = Turn(finish_reason="stop", reasoning="thinking hard")
     body = {"messages": [{"role": "user", "content": "hi"}]}
-    # Only the nudge rung matches an empty turn; coast needs content + tools.
+    # Only the extract rung matches an empty turn; coast needs content + tools.
     step = _first_applicable_step(ladder, attempts, turn, body)
-    assert step is not None and step.name == "nudge"
+    assert step is not None and step.name == "extract"
 
 
 def test_first_applicable_step_skips_exhausted_rung():
-    ladder = [NudgePolicy(text=_NUDGE, max_attempts=1)]
-    attempts = {"nudge": 1}
+    ladder = [ExtractionPolicy(instruction=_INSTRUCTION, max_attempts=1)]
+    attempts = {"extract": 1}
     turn = Turn(finish_reason="stop", reasoning="thinking hard")
     body = {"messages": [{"role": "user", "content": "hi"}]}
     assert _first_applicable_step(ladder, attempts, turn, body) is None
@@ -114,7 +114,7 @@ def test_first_applicable_step_skips_exhausted_rung():
 
 def test_find_step_returns_rung_by_name():
     ladder = [
-        NudgePolicy(text=_NUDGE, max_attempts=2),
+        ExtractionPolicy(instruction=_INSTRUCTION, max_attempts=2),
         CoastPolicy(text=_COAST_TEXT, max_attempts=2),
     ]
     assert _find_step(ladder, "coast") is not None
@@ -122,24 +122,24 @@ def test_find_step_returns_rung_by_name():
 
 
 def test_remediation_outcome_exhausted():
-    step = NudgePolicy(text=_NUDGE, max_attempts=1)
+    step = ExtractionPolicy(instruction=_INSTRUCTION, max_attempts=1)
     turn = Turn(finish_reason="stop", reasoning="still thinking")
     body = {"messages": []}
-    assert _remediation_outcome(step, {"nudge": 1}, turn, body) == "exhausted"
+    assert _remediation_outcome(step, {"extract": 1}, turn, body) == "exhausted"
 
 
 def test_remediation_outcome_succeeded():
-    step = NudgePolicy(text=_NUDGE, max_attempts=1)
+    step = ExtractionPolicy(instruction=_INSTRUCTION, max_attempts=1)
     turn = Turn(finish_reason="stop", content="the answer")
     body = {"messages": []}
-    assert _remediation_outcome(step, {"nudge": 1}, turn, body) == "succeeded"
+    assert _remediation_outcome(step, {"extract": 1}, turn, body) == "succeeded"
 
 
 def test_remediation_outcome_untouched_is_none():
-    step = NudgePolicy(text=_NUDGE, max_attempts=1)
+    step = ExtractionPolicy(instruction=_INSTRUCTION, max_attempts=1)
     turn = Turn(finish_reason="stop", content="the answer")
     body = {"messages": []}
-    assert _remediation_outcome(step, {"nudge": 0}, turn, body) is None
+    assert _remediation_outcome(step, {"extract": 0}, turn, body) is None
 
 
 # --- composition integration ------------------------------------------
@@ -204,16 +204,16 @@ _TOOL_CALL_TURN = [
 ]
 
 
-def test_nudge_and_coast_compose_on_one_request():
+def test_extract_and_coast_compose_on_one_request():
     specs = [{"chunks": turn} for turn in [_EMPTY_TURN, _COAST_TURN, _TOOL_CALL_TURN]]
     with MockUpstream(specs) as mock:
         with settings_override(
             llm_base_url=mock.url,
             loop_detection_enabled=True,
             think_cleanup_enabled=True,
-            think_nudge_enabled=True,
-            think_nudge_text=_NUDGE,
-            think_nudge_max_attempts=2,
+            extract_enabled=True,
+            extract_instruction=_INSTRUCTION,
+            extract_max_attempts=2,
             coast_detection_enabled=True,
             coast_nudge_text=_COAST_TEXT,
             coast_max_attempts=2,
@@ -250,16 +250,16 @@ def test_nudge_and_coast_compose_on_one_request():
     assert message.get("tool_calls"), message
     assert message["tool_calls"][0]["function"]["name"] == "next_chunk", message
 
-    # Three upstream requests: empty (nudged), coasted (re-prompted), answer.
+    # Three upstream requests: empty (extracted), coasted (re-prompted), answer.
     assert mock.request_count == 3, mock.request_count
 
-    # Both rungs succeeded, in ladder order (nudge first, then coast).
+    # Both rungs succeeded, in ladder order (extract first, then coast).
     final = records[-1]
-    assert final["nudge"] == {"attempts": 1, "outcome": "succeeded"}, final
+    assert final["extract"] == {"attempts": 1, "outcome": "succeeded"}, final
     assert final["coast"] == {"attempts": 1, "outcome": "succeeded"}, final
 
     # Each rung recorded exactly one triggered pass.
-    nudge_triggers = [r for r in records if r.get("nudge", {}).get("outcome") == "triggered"]
+    extract_triggers = [r for r in records if r.get("extract", {}).get("outcome") == "triggered"]
     coast_triggers = [r for r in records if r.get("coast", {}).get("outcome") == "triggered"]
-    assert len(nudge_triggers) == 1, records
+    assert len(extract_triggers) == 1, records
     assert len(coast_triggers) == 1, records

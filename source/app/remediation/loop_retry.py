@@ -7,8 +7,8 @@ the identical request reproduces the loop. Re-submitting with a higher
 ``temperature`` and stronger repeat penalties perturbs the trajectory enough to
 break the cycle — without touching the prompt, so the task itself is unchanged.
 
-This mirrors the #14 nudge rung in shape, but for loops rather than empty
-turns:
+This mirrors the #14 nudge rung (now the extraction rung) in shape, but for
+loops rather than empty turns:
 
 * ``apply`` mutates a copy of the request body: a sampling parameter the
   client already submitted is nudged up by ``increment`` (0.1); one it did not

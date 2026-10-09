@@ -9,8 +9,8 @@ actually generating the call. Copilot's agent loop only continues while the
 assistant emits tool calls, so such a turn ends the workflow silently — no
 error, no crash, no user indication (see #16).
 
-This is the sibling of the nudge rung: nudge fires on *empty* turns (no
-visible content), this fires on *non-empty* turns whose chain-of-thought
+This is the sibling of the extraction rung: extraction fires on *empty* turns
+(no visible content), this fires on *non-empty* turns whose chain-of-thought
 collapsed to be byte-identical with the visible content — the deterministic
 "coasting" fingerprint observed in the incident. Re-submitting with the
 coasted turn replayed plus a short re-prompt gives the model a second chance
@@ -111,9 +111,10 @@ class CoastPolicy(Remediation):
         """Return a copy of the request body with the coasted turn replayed and
         the re-prompt appended.
 
-        Unlike nudge (whose empty turn left nothing in context), the coasted
-        assistant message is replayed so the re-prompt ("you said you would
-        call a tool; do so now") refers to something the model actually said.
+        Unlike extraction (whose empty turn left nothing in context), the
+        coasted assistant message is replayed so the re-prompt ("you said you
+        would call a tool; do so now") refers to something the model actually
+        said.
         """
         body = dict(request_body)
         messages = list(body.get("messages") or [])

@@ -52,7 +52,7 @@ def test_streaming_non_sse_success_is_not_fabricated(tmp_path, stream, spec):
         with MockUpstream([spec]) as upstream:
             with settings_override(
                 llm_base_url=upstream.url,
-                think_nudge_enabled=True,
+                extract_enabled=True,
                 coast_detection_enabled=True,
                 think_cleanup_enabled=True,
                 retry_max_attempts=3,

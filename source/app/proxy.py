@@ -34,8 +34,8 @@ from app.remediation.base import (
 )
 from app.remediation.coast import CoastPolicy
 from app.remediation.context import ContextWindowDetector
+from app.remediation.extract import ExtractionPolicy
 from app.remediation.loop_retry import LoopRetryPolicy
-from app.remediation.nudge import NudgePolicy
 from app.remediation.overflow import MessageOverflowGuard
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.runaway import RunawayReasoningPolicy
@@ -72,7 +72,7 @@ class _StreamResult:
 
     Either ``response`` is set (a terminal outcome: loop/stall abort,
     context-window overflow, transport failure, or HTTP error) or the success
-    fields carry the assembled turn for the caller to finalise (nudge, then
+    fields carry the assembled turn for the caller to finalise (extract, then
     the placeholder floor, then reconstruct).
     """
 
@@ -143,7 +143,7 @@ def _streaming_feature_enabled() -> bool:
     """Whether any streaming-path feature is enabled.
 
     The streaming path hosts loop detection plus stall detection,
-    runaway-reasoning detection, nudge, coast, think-cleanup, and the
+    runaway-reasoning detection, extraction, coast, think-cleanup, and the
     tool-call guard. Each has its own switch, and the path must be entered
     whenever any one of them is on — not only when loop detection is on.
 
@@ -156,7 +156,7 @@ def _streaming_feature_enabled() -> bool:
             settings.loop_detection_enabled,
             settings.stall_detection_enabled,
             settings.runaway_reasoning_enabled,
-            settings.think_nudge_enabled,
+            settings.extract_enabled,
             settings.coast_detection_enabled,
             settings.think_cleanup_enabled,
             settings.tool_call_guard_enabled,
@@ -718,7 +718,7 @@ class Proxy:
         thinking (reasoning) stream, one over the visible response.
 
         Remediation is an *ordered, composable ladder* of :class:`Remediation`
-        steps (runaway nudge, loop retry, empty-turn nudge, coast re-prompt),
+        steps (runaway nudge, loop retry, extraction, coast re-prompt),
         each with its own trigger and attempt budget. After each exchange the
         ladder is walked in order and the first rung whose trigger fires
         re-submits; when no rung fires the outcome is final (abort on a
@@ -788,7 +788,7 @@ class Proxy:
                 continue
 
             # No rung fired: the outcome is final. A verdict (loop/stall/
-            # runaway) aborts; a clean turn is finalised (nudge/coast floors).
+            # runaway) aborts; a clean turn is finalised (extract/coast floors).
             if result.response is not None:
                 resp = result.response
                 self._log_completion(
@@ -806,8 +806,8 @@ class Proxy:
                 )
                 return resp
 
-            nudge_outcome = _remediation_outcome(
-                _find_step(ladder, "nudge"), attempts, turn, request_payload
+            extract_outcome = _remediation_outcome(
+                _find_step(ladder, "extract"), attempts, turn, request_payload
             )
             coast_outcome = _remediation_outcome(
                 _find_step(ladder, "coast"), attempts, turn, request_payload
@@ -817,8 +817,8 @@ class Proxy:
                 result,
                 guard,
                 client_wants_stream,
-                attempts.get("nudge", 0),
-                nudge_outcome,
+                attempts.get("extract", 0),
+                extract_outcome,
                 attempts.get("coast", 0),
                 coast_outcome,
             )
@@ -835,16 +835,17 @@ class Proxy:
         """Assemble the ordered, composable remediation ladder from settings.
 
         Order matters: verdict remediations (runaway nudge, then loop retry)
-        run first, then the empty-turn rungs (nudge, then coast). A disabled
-        rung is simply left out — the ladder is a plain list of enabled steps.
+        run first, then extraction (empty-turn answer recovery), then coast. A
+        disabled rung is simply left out — the ladder is a plain list of
+        enabled steps.
         """
         ladder: list[Remediation] = []
         if settings.runaway_reasoning_enabled:
             ladder.append(RunawayReasoningPolicy.from_settings())
         if settings.loop_retry_enabled:
             ladder.append(LoopRetryPolicy.from_settings())
-        if settings.think_nudge_enabled:
-            ladder.append(NudgePolicy.from_settings())
+        if settings.extract_enabled:
+            ladder.append(ExtractionPolicy.from_settings())
         if settings.coast_detection_enabled:
             ladder.append(CoastPolicy.from_settings())
         return ladder
@@ -861,10 +862,10 @@ class Proxy:
         """Record a re-submission that a ladder rung just triggered.
 
         Dispatches to the rung-specific recorder hook so each entry keeps its
-        bespoke shape (``nudge``/``coast``/``runaway``/``loop_retry``).
+        bespoke shape (``extract``/``coast``/``runaway``/``loop_retry``).
         """
-        if step.name == "nudge":
-            await self._record_nudge_pass(base_entry, result, client_wants_stream, attempt)
+        if isinstance(step, ExtractionPolicy):
+            await self._record_extract_pass(base_entry, result, client_wants_stream, attempt, step)
         elif step.name == "coast":
             await self._record_coast_pass(base_entry, result, client_wants_stream, attempt)
         elif step.name == "runaway":
@@ -1072,7 +1073,7 @@ class Proxy:
                 )
 
             # Success: relocate leaked think tags (the caller decides whether
-            # to nudge or apply the placeholder floor before reconstructing).
+            # to extract or apply the placeholder floor before reconstructing).
             relocate_changes: list = []
             if settings.think_cleanup_enabled:
                 guard = ThinkContentGuard.from_settings()
@@ -1108,14 +1109,15 @@ class Proxy:
             ),
         )
 
-    async def _record_nudge_pass(
+    async def _record_extract_pass(
         self,
         base_entry: dict,
         result: _StreamResult,
         client_wants_stream: bool,
-        nudge_attempt: int,
+        extract_attempt: int,
+        step: ExtractionPolicy,
     ) -> None:
-        """Record an empty-text turn that triggered a nudge re-submission."""
+        """Record a think-only turn that triggered an extraction re-submission."""
         turn_body = json.dumps(
             _reconstruct_chat_completion(
                 result.meta, result.content, result.reasoning, result.tool_calls
@@ -1133,7 +1135,14 @@ class Proxy:
                 "pre_remediation_body": _decode(turn_body),
                 "streamed": client_wants_stream,
                 "think_cleanup": result.relocate_changes or None,
-                "nudge": {"attempt": nudge_attempt, "outcome": "triggered"},
+                "extract": {
+                    "attempt": extract_attempt,
+                    "outcome": "triggered",
+                    "mode": step.last_mode,
+                    "resource_chars": step.resource_chars,
+                    "resource_lines": step.resource_lines,
+                    "read_args": step.last_read_args,
+                },
                 "diagnosis": None,
                 "duration": result.duration,
             }
@@ -1240,34 +1249,48 @@ class Proxy:
         result: _StreamResult,
         guard,
         client_wants_stream: bool,
-        nudge_attempt: int,
-        nudge_outcome: str | None,
+        extract_attempt: int,
+        extract_outcome: str | None,
         coast_attempt: int,
         coast_outcome: str | None,
     ) -> Response:
         """Apply the placeholder floor, record, and return the final response."""
         content = result.content
         reasoning = result.reasoning
+        tool_calls: list | None = result.tool_calls
         cleanup_changes = list(result.relocate_changes)
+
+        if extract_outcome == "exhausted":
+            # The final turn is still asking for internal ``gauze_read`` pages;
+            # those tool calls must never reach the client. Drop them and apply
+            # the placeholder floor directly — the reasoning lives in the
+            # rung's captured resource, not this turn, so the guard's
+            # empty-reasoning branch would otherwise leave the turn empty.
+            tool_calls = None
+            content = content or settings.think_empty_response_placeholder
+            cleanup_changes.append({"kind": "empty_content_placeholder"})
+
         if guard is not None:
-            content, guard_changes = guard.guard_empty(content, reasoning, result.tool_calls)
+            content, guard_changes = guard.guard_empty(content, reasoning, tool_calls)
             cleanup_changes.extend(guard_changes)
             if guard_changes:
                 logger.warning("think-cleanup applied placeholder to empty visible turn")
 
         tool_changes: list = []
-        if settings.tool_call_guard_enabled and result.tool_calls:
-            tool_changes = ToolCallGuard.from_settings().validate(result.tool_calls)
+        if settings.tool_call_guard_enabled and tool_calls:
+            tool_changes = ToolCallGuard.from_settings().validate(tool_calls)
             if tool_changes:
                 logger.warning("tool-call repair changed %d tool call(s)", len(tool_changes))
 
         final_body = json.dumps(
-            _reconstruct_chat_completion(result.meta, content, reasoning, result.tool_calls)
+            _reconstruct_chat_completion(result.meta, content, reasoning, tool_calls)
         ).encode("utf-8")
 
-        nudge_entry = None
-        if nudge_outcome is not None:
-            nudge_entry = {"attempts": nudge_attempt, "outcome": nudge_outcome}
+        extract_entry = None
+        if extract_outcome is not None:
+            extract_entry = {"attempts": extract_attempt, "outcome": extract_outcome}
+        if extract_outcome == "exhausted":
+            telemetry.incr("extract_aborts_total")
 
         coast_entry = None
         if coast_outcome is not None:
@@ -1285,7 +1308,7 @@ class Proxy:
                 "streamed": client_wants_stream,
                 "think_cleanup": cleanup_changes or None,
                 "tool_repair": tool_changes or None,
-                "nudge": nudge_entry,
+                "extract": extract_entry,
                 "coast": coast_entry,
                 "diagnosis": None,
                 "duration": result.duration,
@@ -1299,7 +1322,7 @@ class Proxy:
                 # The raw SSE lines still carry the pre-remediation values
                 # (leaked tags or malformed tool-call arguments); rebuild the
                 # stream from the cleaned/repaired values instead.
-                lines = _reconstruct_sse_lines(result.meta, content, reasoning, result.tool_calls)
+                lines = _reconstruct_sse_lines(result.meta, content, reasoning, tool_calls)
             else:
                 lines = list(result.sse_lines)
                 # Guarantee a clean SSE termination even if the upstream

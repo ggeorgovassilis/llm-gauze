@@ -37,6 +37,10 @@ _METRICS = {
         "counter",
         "Context-window overflows aborted.",
     ),
+    "extract_aborts_total": (
+        "counter",
+        "Extraction runs that exhausted their budget and fell back.",
+    ),
     "upstream_latency_seconds": ("histogram", "Upstream response latency."),
     "upstream_down": ("gauge", "Whether the upstream is currently failing."),
 }

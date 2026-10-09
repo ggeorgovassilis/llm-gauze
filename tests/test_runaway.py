@@ -108,7 +108,7 @@ def _run_forward(chunks_by_request, *, enabled=True, max_attempts=2, loop_retry=
             llm_base_url=mock.url,
             loop_detection_enabled=True,
             think_cleanup_enabled=False,
-            think_nudge_enabled=False,
+            extract_enabled=False,
             coast_detection_enabled=False,
             loop_retry_enabled=loop_retry,
             runaway_reasoning_enabled=enabled,

@@ -207,7 +207,7 @@ def _run_forward(chunks_by_request, coast_max=2, enabled=True):
             llm_base_url=mock.url,
             loop_detection_enabled=True,
             think_cleanup_enabled=True,
-            think_nudge_enabled=False,
+            extract_enabled=False,
             coast_detection_enabled=enabled,
             coast_nudge_text=_COAST_TEXT,
             coast_max_attempts=coast_max,

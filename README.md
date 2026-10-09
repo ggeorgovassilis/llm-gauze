@@ -37,6 +37,75 @@ The gateway listens on `http://localhost:9317` and exposes an
 OpenAI-compatible API (e.g. `POST /v1/chat/completions`), forwarding to the
 `LLM_BASE_URL` in `.env`.
 
+### Provider API paths
+
+The gateway appends the client's request path to `LLM_BASE_URL`. For Hetzner
+Inference, set `LLM_BASE_URL=https://inference.hetzner.com/api` and point a
+chat-completions client at `http://localhost:9317` so `/v1/chat/completions`
+reaches `/api/v1/chat/completions` upstream. Do not include `/v1` twice or use
+the provider's website root as the API base.
+
+After changing `.env`, recreate the service; restarting an existing container
+does not reload its environment:
+
+```bash
+docker compose up -d --force-recreate gateway
+```
+
+For local development, use
+`docker compose -f docker-compose.dev.yml up -d --build --force-recreate gateway`.
+Check `/health` afterwards: its `upstream` must show the intended API base,
+including `/api` for Hetzner. Rebuilding an image alone does not correct a
+wrong value in `.env`.
+
+For VS Code Copilot custom endpoints, explicitly select
+provider-level `apiType: "chat-completions"` for both the direct provider and
+gateway entries.
+The direct entry's URL is `https://inference.hetzner.com/api/v1`; the gateway
+entry's URL is `http://localhost:9317`. Supply the provider's bearer token in
+the client's `Authorization` request header; the gateway forwards it unchanged.
+Never put credentials in committed configuration.
+
+The current Copilot `customendpoint` implementation gives an explicit
+`Authorization` request header precedence over its provider API key. Without
+that header, the provider API key must be the real token, not a placeholder.
+
+An upstream HTTP 200 without completion choices is not a successful model
+reply. With streaming remediation enabled, the gateway reports HTTP 502 with
+`invalid_upstream_response` rather than fabricating a completion or an empty
+SSE success. Check the upstream API path and streaming support first. Upstream
+HTTP errors retain their status and body.
+
+For an immediate VS Code 502, inspect `data/records.jsonl` structurally rather
+than dumping recordings or private conversations. Match the client's
+`x-request-id` in `request_headers` to the gateway's `request_id`, then compare
+the record timestamp and attempt `duration` with container completion logs.
+`GitHubCopilotChat` in the user agent distinguishes VS Code traffic from smoke
+probes. A recorded `invalid_upstream_response` is a gateway protocol rejection,
+not evidence that the provider returned HTTP 502: the rejected upstream status
+and content type are not retained in that record. Verify the running API base
+and compare a synthetic request directly when those details are needed.
+The Hetzner website-root route has returned HTTP 200 with nine non-SSE bytes
+and `application/octet-stream`, producing this immediate rejection even for
+a valid chat-completions request with tools.
+
+Temporary Compose overrides do not persist an `.env` correction. Before using
+the ordinary start command again, privately set the correct `LLM_BASE_URL`
+and recreate the gateway. A corrected route alone does not prove a model
+can complete the VS Code workflow. Compare the relevant request shape,
+including tools, message roles and `stream_options`, not just an OK-only curl.
+Use synthetic content and bounded time/output for live probes, and report any
+added token cap as a difference from the recorded request.
+
+If authenticated generation still times out, compare the same small request
+directly against the provider. Record time to response headers and first SSE
+data separately from total duration: no response headers is not evidence of
+ongoing reasoning. Authenticated `/models` discovery proves API reachability
+and token acceptance, but not model readiness. A successful completion from
+another advertised model with the same token helps isolate a model-specific
+provider failure; report that comparison to the provider rather than silently
+changing models or treating a gateway health check as successful generation.
+
 ### File ownership
 
 The container runs as your host user (`UID`/`GID`, default `1000`) so the

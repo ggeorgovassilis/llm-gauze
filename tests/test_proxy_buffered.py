@@ -14,6 +14,7 @@ import json
 import logging
 
 import httpx
+import pytest
 from app.config import settings
 from app.proxy import (
     Proxy,
@@ -31,7 +32,122 @@ from app.proxy import (
 from app.recorder import Recorder
 from app.remediation.base import Diagnosis
 from app.remediation.context import CONTEXT_WINDOW_CODE
-from mock_upstream import make_request, settings_override
+from mock_upstream import MockUpstream, make_request, settings_override, sse
+from mock_upstream import chunk as _chunk
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"status": 200, "content_type": "text/plain", "body": b"Not an API endpoint"},
+        {"status": 200, "content_type": "application/json", "body": b'{"choices":[]}'},
+        {"steps": [(0, b"data: [DONE]\n\n")]},
+        {"chunks": [{"choices": [], "usage": {"completion_tokens": 0}}]},
+        {"steps": [(0, b"data: invalid\n\ndata: []\n\n")]},
+    ],
+)
+def test_streaming_non_sse_success_is_not_fabricated(tmp_path, stream, spec):
+    async def run():
+        with MockUpstream([spec]) as upstream:
+            with settings_override(
+                llm_base_url=upstream.url,
+                think_nudge_enabled=True,
+                coast_detection_enabled=True,
+                think_cleanup_enabled=True,
+                retry_max_attempts=3,
+            ):
+                proxy = Proxy(Recorder(tmp_path / "records.jsonl"))
+                try:
+                    response = await proxy.forward(
+                        await make_request(json.dumps({"stream": stream, "messages": []}).encode()),
+                        "v1/chat/completions",
+                    )
+                finally:
+                    await proxy.aclose()
+            assert upstream.request_count == 1
+        assert response.status_code == 502
+        assert response.headers["content-type"] == "application/json"
+        assert "choices" not in json.loads(response.body)
+        assert json.loads(response.body)["error"]["code"] == "invalid_upstream_response"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("http_status", [200, 401])
+def test_streaming_upstream_errors_preserved(tmp_path, http_status):
+    error = {"error": {"code": "unauthorised", "message": "Upstream rejected the request"}}
+    spec = (
+        {"chunks": [error]}
+        if http_status == 200
+        else {"status": http_status, "body": json.dumps(error).encode()}
+    )
+
+    async def run():
+        with MockUpstream([spec]) as upstream:
+            with settings_override(llm_base_url=upstream.url, think_cleanup_enabled=True):
+                proxy = Proxy(Recorder(tmp_path / "records.jsonl"))
+                try:
+                    response = await proxy.forward(
+                        await make_request(b'{"stream":true,"messages":[]}'),
+                        "v1/chat/completions",
+                    )
+                finally:
+                    await proxy.aclose()
+            assert upstream.request_count == 1
+        assert response.status_code == (502 if http_status == 200 else http_status)
+        assert json.loads(response.body) == error
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_streaming_valid_reasoning_tools_and_usage_preserved(tmp_path, stream):
+    chunks = [
+        _chunk({"role": "assistant", "reasoning_content": "Let me check."}),
+        _chunk(
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ]
+            }
+        ),
+        _chunk({}, finish_reason="tool_calls"),
+        {"choices": [], "usage": {"completion_tokens": 12}},
+    ]
+
+    async def run():
+        with MockUpstream([{"chunks": chunks}]) as upstream:
+            with settings_override(llm_base_url=upstream.url, think_cleanup_enabled=True):
+                proxy = Proxy(Recorder(tmp_path / "records.jsonl"))
+                try:
+                    response = await proxy.forward(
+                        await make_request(json.dumps({"stream": stream, "messages": []}).encode()),
+                        "v1/chat/completions",
+                    )
+                finally:
+                    await proxy.aclose()
+            assert upstream.request_count == 1
+        assert response.status_code == 200
+        if stream:
+            assert response.body == b"".join(sse(frame) for frame in chunks) + b"data: [DONE]\n\n"
+        else:
+            result = json.loads(response.body)
+            assert result["choices"][0]["finish_reason"] == "tool_calls"
+            assert result["choices"][0]["message"]["reasoning_content"] == "Let me check."
+            assert result["choices"][0]["message"]["tool_calls"][0]["function"] == {
+                "name": "lookup",
+                "arguments": "{}",
+            }
+            assert result["usage"] == {"completion_tokens": 12}
+
+    asyncio.run(run())
+
 
 # --- pure helper unit tests -------------------------------------------
 

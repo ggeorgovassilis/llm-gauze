@@ -897,6 +897,7 @@ class Proxy:
             status: int | None = None
             resp_headers: dict = {}
             error_body = b""
+            invalid_response = False
             error: dict | None = None
             diagnosis = None
             content = ""
@@ -912,6 +913,7 @@ class Proxy:
                 status = outcome.status
                 resp_headers = outcome.resp_headers
                 error_body = outcome.error_body
+                invalid_response = outcome.invalid_response
                 loop_verdict = outcome.verdict
                 loop_stream = outcome.verdict_stream
                 content = outcome.content
@@ -1025,8 +1027,16 @@ class Proxy:
 
             # HTTP error status -> retry or return it.
             if status is not None and status >= 400:
-                diagnosis = policy.detector.diagnose_status(status, body=error_body)
-                decision = await self._retry_decision(diagnosis, attempt, policy.max_attempts)
+                diagnosis = (
+                    None
+                    if invalid_response
+                    else policy.detector.diagnose_status(status, body=error_body)
+                )
+                decision = (
+                    None
+                    if invalid_response
+                    else await self._retry_decision(diagnosis, attempt, policy.max_attempts)
+                )
                 await self.recorder.record(
                     {
                         **base_entry,

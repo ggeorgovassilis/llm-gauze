@@ -83,7 +83,8 @@ has no extract/coast/empty-stop term:
 
 The nested block on a remediation pass also carries the exact re-submitted
 request body for auditability (`runaway.resubmitted_body`,
-`loop_retry.resubmitted_body`) or the pass counters (`extract`/`coast`).
+`loop_retry.resubmitted_body`) or the pass counters
+(`extract`/`coast`/`empty_stop`).
 
 ## Abort records
 

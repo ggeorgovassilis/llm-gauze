@@ -57,25 +57,27 @@ wrote it or which optional keys it carries.
   `null`, because that attempt's body was never delivered (it was discarded,
   failed, or re-submitted).
 
-The pre-remediation turn that an extraction or coast re-submission discards is **not**
-written to `response_body`; it lives in `pre_remediation_body` (a string,
-decoded from the reconstructed turn) so both bodies stay distinguishable.
+The pre-remediation turn that an extraction, coast or empty-stop
+re-submission discards is **not** written to `response_body`; it lives in
+`pre_remediation_body` (a string, decoded from the reconstructed turn) so both
+bodies stay distinguishable.
 
 ## Remediation-pass records
 
-The four re-submission rungs each write one record with their own nested block.
+The five re-submission rungs each write one record with their own nested block.
 There are **two `outcome` keys**, which must not be confused:
 
 * The **top-level `outcome`** is the stable discriminator described above.
 * The **nested `*.outcome`** describes the nested step's own result and is
   always `"triggered"` on a pass record (e.g. `extract.outcome`,
-  `coast.outcome`, `runaway.outcome`, `loop_retry.outcome`).
+  `coast.outcome`, `empty_stop.outcome`, `runaway.outcome`,
+  `loop_retry.outcome`).
 
-The top-level `outcome` differs across the four rungs because the vocabulary
-has no extract/coast term:
+The top-level `outcome` differs across the five rungs because the vocabulary
+has no extract/coast/empty-stop term:
 
-* `extract` / `coast` passes stamp `outcome: "success"` — the turn was empty and
-  the re-submission is the remediation, not an abort.
+* `extract` / `coast` / `empty_stop` passes stamp `outcome: "success"` — the
+  turn was empty and the re-submission is the remediation, not an abort.
 * `runaway` passes stamp `outcome: "runaway_reasoning_aborted"`.
 * `loop_retry` passes stamp `outcome: "loop_aborted"`.
 

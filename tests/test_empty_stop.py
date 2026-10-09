@@ -16,6 +16,7 @@ from app.proxy import Proxy
 from app.recorder import Recorder
 from app.remediation.base import Turn
 from app.remediation.empty_stop import EmptyStopPolicy, token_counts
+from app.telemetry import telemetry
 from mock_upstream import MockUpstream, chunk, settings_override
 
 _NUDGE_TEXT = "PLEASE_PRODUCE_A_VISIBLE_REPLY"
@@ -155,7 +156,7 @@ def test_token_counts_invalid_values_are_none():
 # --- integration harness ---------------------------------------------
 
 
-def _run_forward(chunks_by_request, empty_stop_max=2, enabled=True):
+def _run_forward(chunks_by_request, record_path, empty_stop_max=2, enabled=True):
     specs = [{"chunks": turn} for turn in chunks_by_request]
     with MockUpstream(specs) as mock:
         with settings_override(
@@ -172,7 +173,7 @@ def _run_forward(chunks_by_request, empty_stop_max=2, enabled=True):
             empty_stop_max_attempts=empty_stop_max,
             tool_call_guard_enabled=False,
         ):
-            recorder = Recorder("/tmp/empty_stop_integration.jsonl")
+            recorder = Recorder(record_path)
             proxy = Proxy(recorder)
             body = json.dumps(_request()).encode()
 
@@ -190,19 +191,16 @@ def _run_forward(chunks_by_request, empty_stop_max=2, enabled=True):
                         "path": "/v1/chat/completions",
                     },
                 )
-                records = [
-                    json.loads(line)
-                    for line in open("/tmp/empty_stop_integration.jsonl")
-                    if line.strip()
-                ]
+                records = [json.loads(line) for line in open(record_path) if line.strip()]
                 return resp, records
 
             resp, records = asyncio.run(run())
             return resp, records, mock.request_count, mock.json_bodies()
 
 
-def test_empty_stop_is_reprompted_and_returns_answer():
-    resp, records, count, bodies = _run_forward([_SILENT_EMPTY_TURN, _ANSWER_TURN])
+def test_empty_stop_is_reprompted_and_returns_answer(tmp_path):
+    record_path = tmp_path / "empty_stop_integration.jsonl"
+    resp, records, count, bodies = _run_forward([_SILENT_EMPTY_TURN, _ANSWER_TURN], record_path)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     message = json.loads(resp.body)["choices"][0]["message"]
     assert message["content"] == "the real answer", message
@@ -211,16 +209,29 @@ def test_empty_stop_is_reprompted_and_returns_answer():
     assert count == 2, count
     assert bodies[1]["messages"][-1] == {"role": "user", "content": _NUDGE_TEXT}, bodies[1]
 
-    final = records[-1]
-    assert final["empty_stop"] == {"attempts": 1, "outcome": "succeeded"}, final
     triggered = [r for r in records if r.get("empty_stop", {}).get("outcome") == "triggered"]
     assert len(triggered) == 1, records
+    # The discarded empty turn lives in `pre_remediation_body` (not `response_body`).
+    assert triggered[0]["response_body"] is None, triggered[0]
+    pre = triggered[0]["pre_remediation_body"]
+    assert '"assistant"' in pre, pre
+    assert '"finish_reason": "stop"' in pre, pre
+
+    final = records[-1]
+    assert final["empty_stop"] == {"attempts": 1, "outcome": "succeeded"}, final
 
 
-def test_empty_stop_budget_exhausted_falls_back_to_placeholder():
+def test_empty_stop_budget_exhausted_falls_back_to_placeholder(tmp_path):
+    record_path = tmp_path / "empty_stop_exhausted_integration.jsonl"
+    before = telemetry.snapshot()["counters"].get("empty_stop_aborts_total", 0)
     resp, records, count, _ = _run_forward(
-        [_SILENT_EMPTY_TURN, _SILENT_EMPTY_TURN, _SILENT_EMPTY_TURN], empty_stop_max=2
+        [_SILENT_EMPTY_TURN, _SILENT_EMPTY_TURN, _SILENT_EMPTY_TURN],
+        record_path,
+        empty_stop_max=2,
     )
+    after = telemetry.snapshot()["counters"].get("empty_stop_aborts_total", 0)
+    assert after == before + 1, (before, after)
+
     assert resp.status_code == 200, (resp.status_code, resp.body)
     message = json.loads(resp.body)["choices"][0]["message"]
     # The rung gave up: no tool calls leak, and the placeholder floor applies.
@@ -232,8 +243,13 @@ def test_empty_stop_budget_exhausted_falls_back_to_placeholder():
     assert final["empty_stop"] == {"attempts": 2, "outcome": "exhausted"}, final
 
 
-def test_empty_stop_disabled_is_noop():
-    resp, records, count, _ = _run_forward([_SILENT_EMPTY_TURN], enabled=False)
+def test_empty_stop_disabled_is_noop(tmp_path):
+    record_path = tmp_path / "empty_stop_disabled_integration.jsonl"
+    before = telemetry.snapshot()["counters"].get("empty_stop_aborts_total", 0)
+    resp, records, count, _ = _run_forward([_SILENT_EMPTY_TURN], record_path, enabled=False)
+    after = telemetry.snapshot()["counters"].get("empty_stop_aborts_total", 0)
+    assert after == before, (before, after)
+
     assert resp.status_code == 200, (resp.status_code, resp.body)
     assert count == 1, count
     assert not records[-1].get("empty_stop"), records[-1]

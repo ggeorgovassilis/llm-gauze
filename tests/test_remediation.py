@@ -15,6 +15,7 @@ from app.proxy import Proxy, _find_step, _first_applicable_step, _remediation_ou
 from app.recorder import Recorder
 from app.remediation.base import Remediation, Transform, Turn
 from app.remediation.coast import CoastPolicy
+from app.remediation.empty_stop import EmptyStopPolicy
 from app.remediation.extract import ExtractionPolicy
 from app.remediation.loop_retry import LoopRetryPolicy
 from app.remediation.overflow import MessageOverflowGuard
@@ -36,6 +37,7 @@ _chunk = chunk
 def test_policies_implement_remediation_protocol():
     for cls, inst in (
         (ExtractionPolicy, ExtractionPolicy.from_settings()),
+        (EmptyStopPolicy, EmptyStopPolicy.from_settings()),
         (CoastPolicy, CoastPolicy.from_settings()),
         (RunawayReasoningPolicy, RunawayReasoningPolicy.from_settings()),
         (LoopRetryPolicy, LoopRetryPolicy.from_settings()),
@@ -60,6 +62,7 @@ def test_transforms_implement_transform_protocol():
 def test_remediation_names_are_stable():
     # The recorder keys and attempt counters hang off these names.
     assert ExtractionPolicy.from_settings().name == "extract"
+    assert EmptyStopPolicy.from_settings().name == "empty_stop"
     assert CoastPolicy.from_settings().name == "coast"
     assert RunawayReasoningPolicy.from_settings().name == "runaway"
     assert LoopRetryPolicy.from_settings().name == "loop_retry"
@@ -74,10 +77,17 @@ def test_ladder_ordering():
         runaway_reasoning_enabled=True,
         loop_retry_enabled=True,
         extract_enabled=True,
+        empty_stop_detection_enabled=True,
         coast_detection_enabled=True,
     ):
         ladder = proxy._build_remediation_ladder()
-    assert [step.name for step in ladder] == ["runaway", "loop_retry", "extract", "coast"]
+    assert [step.name for step in ladder] == [
+        "runaway",
+        "loop_retry",
+        "extract",
+        "empty_stop",
+        "coast",
+    ]
 
 
 def test_ladder_omits_disabled_rungs():
@@ -86,6 +96,7 @@ def test_ladder_omits_disabled_rungs():
         runaway_reasoning_enabled=False,
         loop_retry_enabled=False,
         extract_enabled=False,
+        empty_stop_detection_enabled=False,
         coast_detection_enabled=False,
     ):
         assert proxy._build_remediation_ladder() == []

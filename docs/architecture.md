@@ -73,14 +73,14 @@ implements the one uniform protocol in `base.py`:
   step's own re-submission budget) are declared as class attributes.
 
 The ladder is assembled from enabled settings in `_build_remediation_ladder`
-as a plain ordered list — **runaway → loop_retry → extract → coast** — and a
-disabled rung is simply left out. After each exchange the proxy walks the
-ladder in order and re-submits via the first rung whose `applies` fires; when
-no rung fires the outcome is final. A new remediation is therefore "implement
-and register" (append a `Remediation` subclass to the ladder), not "edit the
-loop". `Transform` classes (`ThinkContentGuard`, `ToolCallGuard`,
-`MessageOverflowGuard`) share a sibling protocol: a canonical `apply` that
-rewrites a value and reports its mutations, never re-submitting.
+as a plain ordered list — **runaway → loop_retry → extract → empty_stop →
+coast** — and a disabled rung is simply left out. After each exchange the
+proxy walks the ladder in order and re-submits via the first rung whose
+`applies` fires; when no rung fires the outcome is final. A new remediation is
+therefore "implement and register" (append a `Remediation` subclass to the
+ladder), not "edit the loop". `Transform` classes (`ThinkContentGuard`,
+`ToolCallGuard`, `MessageOverflowGuard`) share a sibling protocol: a canonical
+`apply` that rewrites a value and reports its mutations, never re-submitting.
 - `app/remediation/retry.py` — `RetryableDetector` (transient exceptions +
   retryable HTTP statuses) and `ExponentialBackoff` (with optional jitter).
 - `app/remediation/loop.py` — `ThinkingLoopDetector`, a stateful
@@ -99,6 +99,9 @@ rewrites a value and reports its mutations, never re-submitting.
 - `app/remediation/extract.py` — `ExtractionPolicy`, recover a visible answer
   from a turn that finished empty (reasoning only, no content, no tool calls)
   by paging through the reasoning via the `gauze_read` tool.
+- `app/remediation/empty_stop.py` — `EmptyStopPolicy`, re-prompt a turn that
+  stopped with empty content, no tool calls, and no reasoning content while
+  still consuming reasoning tokens (`reasoning_tokens > 0`, `text_tokens == 0`).
 - `app/remediation/coast.py` — `CoastPolicy`, re-prompt a turn that announced
   a tool call but did not make one.
 - `app/remediation/runaway.py` — `RunawayReasoningDetector` /

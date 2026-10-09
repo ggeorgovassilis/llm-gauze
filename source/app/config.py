@@ -458,6 +458,37 @@ class Settings(BaseSettings):
         ge=0,
     )
 
+    # --- Empty-stop detection (thought internally then emitted nothing) --
+    # Master switch for re-submitting a turn that stopped with empty visible
+    # content, no tool calls, and no reasoning_content — yet consumed reasoning
+    # tokens without producing text tokens (completion_tokens_details). This is
+    # the silent empty stop described in #135: the reasoning is internal and
+    # lost, so the only recourse is to give the model a second chance.
+    empty_stop_detection_enabled: bool = _field(
+        True,
+        "Master switch for empty-stop detection.",
+        "Empty-stop detection",
+    )
+
+    # Re-prompt text appended as a ``user`` message on the re-submitted
+    # request. The empty assistant turn left nothing in context, so only the
+    # re-prompt is appended (no assistant message is replayed).
+    empty_stop_nudge_text: str = _field(
+        "Your previous reply was empty. "
+        "Produce a visible answer or call a tool; do not stop without either.",
+        "Re-prompt text appended as a user message on the re-submitted request.",
+        "Empty-stop detection",
+    )
+
+    # Maximum number of empty-stop re-submissions before falling back to the
+    # placeholder floor (see ``think_empty_response_placeholder``).
+    empty_stop_max_attempts: int = _field(
+        2,
+        "Max empty-stop re-submissions before falling back to the placeholder floor.",
+        "Empty-stop detection",
+        ge=0,
+    )
+
     # --- Runaway-reasoning detection (thinks endlessly, never answers) ---
     # Master switch for flagging a turn that keeps emitting reasoning tokens
     # while never producing visible content — the model "thinks endlessly" and

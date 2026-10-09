@@ -34,6 +34,7 @@ from app.remediation.base import (
 )
 from app.remediation.coast import CoastPolicy
 from app.remediation.context import ContextWindowDetector
+from app.remediation.empty_stop import EmptyStopPolicy, token_counts
 from app.remediation.extract import ExtractionPolicy
 from app.remediation.loop_retry import LoopRetryPolicy
 from app.remediation.overflow import MessageOverflowGuard
@@ -718,8 +719,8 @@ class Proxy:
         thinking (reasoning) stream, one over the visible response.
 
         Remediation is an *ordered, composable ladder* of :class:`Remediation`
-        steps (runaway nudge, loop retry, extraction, coast re-prompt),
-        each with its own trigger and attempt budget. After each exchange the
+        steps (runaway nudge, loop retry, extraction, empty-stop re-prompt,
+        coast re-prompt), each with its own trigger and attempt budget. After each exchange the
         ladder is walked in order and the first rung whose trigger fires
         re-submits; when no rung fires the outcome is final (abort on a
         verdict, or finalise the assembled turn). A *stall* is never remediated
@@ -758,11 +759,14 @@ class Proxy:
                 base_entry,
             )
 
+            reasoning_tokens, text_tokens = token_counts(result.meta)
             turn = Turn(
                 finish_reason=result.finish_reason,
                 content=result.content,
                 reasoning=result.reasoning,
                 tool_calls=result.tool_calls,
+                reasoning_tokens=reasoning_tokens,
+                text_tokens=text_tokens,
                 verdict=result.loop_verdict,
             )
 
@@ -812,6 +816,9 @@ class Proxy:
             coast_outcome = _remediation_outcome(
                 _find_step(ladder, "coast"), attempts, turn, request_payload
             )
+            empty_stop_outcome = _remediation_outcome(
+                _find_step(ladder, "empty_stop"), attempts, turn, request_payload
+            )
             resp = await self._finalize_success(
                 base_entry,
                 result,
@@ -821,6 +828,8 @@ class Proxy:
                 extract_outcome,
                 attempts.get("coast", 0),
                 coast_outcome,
+                attempts.get("empty_stop", 0),
+                empty_stop_outcome,
             )
             self._log_completion(method, url, resp.status_code, "success", time.time() - started)
             logger.debug(
@@ -835,7 +844,9 @@ class Proxy:
         """Assemble the ordered, composable remediation ladder from settings.
 
         Order matters: verdict remediations (runaway nudge, then loop retry)
-        run first, then extraction (empty-turn answer recovery), then coast. A
+        run first, then the empty-turn siblings (extraction for turns with
+        reasoning, empty-stop for turns without it), then coast (non-empty
+        content). The triggers are disjoint, so no rung masks another. A
         disabled rung is simply left out — the ladder is a plain list of
         enabled steps.
         """
@@ -846,6 +857,8 @@ class Proxy:
             ladder.append(LoopRetryPolicy.from_settings())
         if settings.extract_enabled:
             ladder.append(ExtractionPolicy.from_settings())
+        if settings.empty_stop_detection_enabled:
+            ladder.append(EmptyStopPolicy.from_settings())
         if settings.coast_detection_enabled:
             ladder.append(CoastPolicy.from_settings())
         return ladder
@@ -862,12 +875,15 @@ class Proxy:
         """Record a re-submission that a ladder rung just triggered.
 
         Dispatches to the rung-specific recorder hook so each entry keeps its
-        bespoke shape (``extract``/``coast``/``runaway``/``loop_retry``).
+        bespoke shape (``extract``/``empty_stop``/``coast``/``runaway``/
+        ``loop_retry``).
         """
         if isinstance(step, ExtractionPolicy):
             await self._record_extract_pass(base_entry, result, client_wants_stream, attempt, step)
         elif step.name == "coast":
             await self._record_coast_pass(base_entry, result, client_wants_stream, attempt)
+        elif step.name == "empty_stop":
+            await self._record_empty_stop_pass(base_entry, result, client_wants_stream, attempt)
         elif step.name == "runaway":
             await self._record_runaway_pass(base_entry, result, attempt, resubmitted_body)
         elif step.name == "loop_retry":
@@ -1179,6 +1195,37 @@ class Proxy:
             }
         )
 
+    async def _record_empty_stop_pass(
+        self,
+        base_entry: dict,
+        result: _StreamResult,
+        client_wants_stream: bool,
+        empty_stop_attempt: int,
+    ) -> None:
+        """Record a silent empty stop that triggered a re-prompt re-submission."""
+        turn_body = json.dumps(
+            _reconstruct_chat_completion(
+                result.meta, result.content, result.reasoning, result.tool_calls
+            )
+        ).encode("utf-8")
+        await self.recorder.record(
+            {
+                **base_entry,
+                "attempt": result.attempt,
+                "max_attempts": result.max_attempts,
+                "outcome": "success",
+                "status": result.status,
+                "response_headers": result.resp_headers,
+                "response_body": None,
+                "pre_remediation_body": _decode(turn_body),
+                "streamed": client_wants_stream,
+                "think_cleanup": result.relocate_changes or None,
+                "empty_stop": {"attempt": empty_stop_attempt, "outcome": "triggered"},
+                "diagnosis": None,
+                "duration": result.duration,
+            }
+        )
+
     async def _record_runaway_pass(
         self,
         base_entry: dict,
@@ -1253,6 +1300,8 @@ class Proxy:
         extract_outcome: str | None,
         coast_attempt: int,
         coast_outcome: str | None,
+        empty_stop_attempt: int,
+        empty_stop_outcome: str | None,
     ) -> Response:
         """Apply the placeholder floor, record, and return the final response."""
         content = result.content
@@ -1266,6 +1315,14 @@ class Proxy:
             # the placeholder floor directly — the reasoning lives in the
             # rung's captured resource, not this turn, so the guard's
             # empty-reasoning branch would otherwise leave the turn empty.
+            tool_calls = None
+            content = content or settings.think_empty_response_placeholder
+            cleanup_changes.append({"kind": "empty_content_placeholder"})
+        elif empty_stop_outcome == "exhausted":
+            # The final turn is still a silent empty stop. It has no tool calls
+            # by definition, but apply the placeholder floor directly so the
+            # client never receives a message-less turn — the guard only floors
+            # empty turns that still carry reasoning, and here there is none.
             tool_calls = None
             content = content or settings.think_empty_response_placeholder
             cleanup_changes.append({"kind": "empty_content_placeholder"})
@@ -1296,6 +1353,12 @@ class Proxy:
         if coast_outcome is not None:
             coast_entry = {"attempts": coast_attempt, "outcome": coast_outcome}
 
+        empty_stop_entry = None
+        if empty_stop_outcome is not None:
+            empty_stop_entry = {"attempts": empty_stop_attempt, "outcome": empty_stop_outcome}
+        if empty_stop_outcome == "exhausted":
+            telemetry.incr("empty_stop_aborts_total")
+
         await self.recorder.record(
             {
                 **base_entry,
@@ -1310,6 +1373,7 @@ class Proxy:
                 "tool_repair": tool_changes or None,
                 "extract": extract_entry,
                 "coast": coast_entry,
+                "empty_stop": empty_stop_entry,
                 "diagnosis": None,
                 "duration": result.duration,
             }

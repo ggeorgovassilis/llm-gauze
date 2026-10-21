@@ -200,7 +200,7 @@ def test_apply_replays_coast_turn_and_appends_nudge():
 # --- integration harness ---------------------------------------------
 
 
-def _run_forward(chunks_by_request, coast_max=2, enabled=True):
+def _run_forward(tmp_path, chunks_by_request, coast_max=2, enabled=True):
     specs = [{"chunks": turn} for turn in chunks_by_request]
     with MockUpstream(specs) as mock:
         with settings_override(
@@ -212,7 +212,7 @@ def _run_forward(chunks_by_request, coast_max=2, enabled=True):
             coast_nudge_text=_COAST_TEXT,
             coast_max_attempts=coast_max,
         ):
-            recorder = Recorder("/tmp/coast_integration.jsonl")
+            recorder = Recorder(tmp_path / "coast_integration.jsonl")
             proxy = Proxy(recorder)
             body = json.dumps(_loop_request()).encode()
 
@@ -232,7 +232,7 @@ def _run_forward(chunks_by_request, coast_max=2, enabled=True):
                 )
                 records = [
                     json.loads(line)
-                    for line in open("/tmp/coast_integration.jsonl")
+                    for line in open(tmp_path / "coast_integration.jsonl")
                     if line.strip()
                 ]
                 return resp, records
@@ -241,8 +241,8 @@ def _run_forward(chunks_by_request, coast_max=2, enabled=True):
             return resp, records, mock.request_count
 
 
-def test_coasted_turn_is_reprompted_and_returns_tool_call():
-    resp, records, count = _run_forward([_COAST_TURN, _TOOL_CALL_TURN], coast_max=2)
+def test_coasted_turn_is_reprompted_and_returns_tool_call(tmp_path):
+    resp, records, count = _run_forward(tmp_path, [_COAST_TURN, _TOOL_CALL_TURN], coast_max=2)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     message = data["choices"][0]["message"]
@@ -257,8 +257,10 @@ def test_coasted_turn_is_reprompted_and_returns_tool_call():
     assert len(triggered) == 1, records
 
 
-def test_coast_budget_exhausted_returns_coasted_turn():
-    resp, records, count = _run_forward([_COAST_TURN, _COAST_TURN, _COAST_TURN], coast_max=2)
+def test_coast_budget_exhausted_returns_coasted_turn(tmp_path):
+    resp, records, count = _run_forward(
+        tmp_path, [_COAST_TURN, _COAST_TURN, _COAST_TURN], coast_max=2
+    )
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     message = data["choices"][0]["message"]
@@ -269,8 +271,8 @@ def test_coast_budget_exhausted_returns_coasted_turn():
     assert final["coast"] == {"attempts": 2, "outcome": "exhausted"}, final
 
 
-def test_coast_disabled_is_noop():
-    resp, records, count = _run_forward([_COAST_TURN], coast_max=2, enabled=False)
+def test_coast_disabled_is_noop(tmp_path):
+    resp, records, count = _run_forward(tmp_path, [_COAST_TURN], coast_max=2, enabled=False)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     message = data["choices"][0]["message"]

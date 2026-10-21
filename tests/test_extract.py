@@ -253,7 +253,7 @@ def test_read_slice_clamps_default_remainder_to_max_window():
 # --- integration harness ---------------------------------------------
 
 
-def _run_forward(chunks_by_request, extract_max=3, stream=False, body=None):
+def _run_forward(tmp_path, chunks_by_request, extract_max=3, stream=False, body=None):
     specs = [{"chunks": turn} for turn in chunks_by_request]
     with MockUpstream(specs) as mock:
         with settings_override(
@@ -269,7 +269,7 @@ def _run_forward(chunks_by_request, extract_max=3, stream=False, body=None):
             coast_detection_enabled=False,
             tool_call_guard_enabled=False,
         ):
-            recorder = Recorder("/tmp/extract_integration.jsonl")
+            recorder = Recorder(tmp_path / "extract_integration.jsonl")
             proxy = Proxy(recorder)
             req = body or {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
             if stream:
@@ -292,7 +292,7 @@ def _run_forward(chunks_by_request, extract_max=3, stream=False, body=None):
                 )
                 records = [
                     json.loads(line)
-                    for line in open("/tmp/extract_integration.jsonl")
+                    for line in open(tmp_path / "extract_integration.jsonl")
                     if line.strip()
                 ]
                 return resp, records
@@ -350,8 +350,8 @@ def _run_watchdog_abort(specs, tmp_path, extract_enabled=True):
     return resp, before, after
 
 
-def test_think_only_turn_is_extracted_and_returns_real_answer():
-    resp, records, count, bodies = _run_forward([_THINK_TURN, _read_turn(), _ANSWER_TURN])
+def test_think_only_turn_is_extracted_and_returns_real_answer(tmp_path):
+    resp, records, count, bodies = _run_forward(tmp_path, [_THINK_TURN, _read_turn(), _ANSWER_TURN])
     assert resp.status_code == 200, (resp.status_code, resp.body)
     message = json.loads(resp.body)["choices"][0]["message"]
     assert message["content"] == "the real answer", message
@@ -383,10 +383,12 @@ def test_think_only_turn_is_extracted_and_returns_real_answer():
     ], triggered[1]
 
 
-def test_extract_budget_exhausted_falls_back_to_placeholder():
+def test_extract_budget_exhausted_falls_back_to_placeholder(tmp_path):
     # Keep looping on read calls: seed + one read consumes the budget of 2,
     # and the final read finds the rung spent — the placeholder floor applies.
-    resp, records, count, _ = _run_forward([_THINK_TURN, _read_turn(), _read_turn()], extract_max=2)
+    resp, records, count, _ = _run_forward(
+        tmp_path, [_THINK_TURN, _read_turn(), _read_turn()], extract_max=2
+    )
     assert resp.status_code == 200, (resp.status_code, resp.body)
     message = json.loads(resp.body)["choices"][0]["message"]
     assert message["content"] == _PLACEHOLDER, message
@@ -396,7 +398,7 @@ def test_extract_budget_exhausted_falls_back_to_placeholder():
     assert final["extract"] == {"attempts": 2, "outcome": "exhausted"}, final
 
 
-def test_foreign_tool_call_passes_through_untouched():
+def test_foreign_tool_call_passes_through_untouched(tmp_path):
     req = {
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}],
@@ -423,7 +425,7 @@ def test_foreign_tool_call_passes_through_untouched():
         ),
         _chunk({}, finish_reason="tool_calls"),
     ]
-    resp, records, count, _ = _run_forward([foreign], body=req)
+    resp, records, count, _ = _run_forward(tmp_path, [foreign], body=req)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     message = json.loads(resp.body)["choices"][0]["message"]
     assert message["tool_calls"][0]["function"]["name"] == "client_tool", message
@@ -431,10 +433,11 @@ def test_foreign_tool_call_passes_through_untouched():
     assert records[-1].get("extract") is None, records[-1]
 
 
-def test_large_reasoning_is_never_resubmitted_in_full():
+def test_large_reasoning_is_never_resubmitted_in_full(tmp_path):
     big = "\n".join(f"reasoning line {i}" for i in range(1, 101))
     resp, records, count, bodies = _run_forward(
-        [_turn(reasoning_content=big), _read_turn(line_from=50, line_count=1), _ANSWER_TURN]
+        tmp_path,
+        [_turn(reasoning_content=big), _read_turn(line_from=50, line_count=1), _ANSWER_TURN],
     )
     assert resp.status_code == 200, (resp.status_code, resp.body)
     assert json.loads(resp.body)["choices"][0]["message"]["content"] == "the real answer"

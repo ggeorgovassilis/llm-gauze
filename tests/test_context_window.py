@@ -131,11 +131,11 @@ def _context_settings(mock):
     )
 
 
-def test_buffered_forward_fails_fast():
+def test_buffered_forward_fails_fast(tmp_path):
     """Non-chat path: retryable 500 + context body -> one attempt, passed
     through verbatim (upstream status + body) instead of retried."""
     with _context_mock(status=500) as mock, _context_settings(mock):
-        recorder = Recorder("/tmp/context_buffered.jsonl")
+        recorder = Recorder(tmp_path / "context_buffered.jsonl")
 
         async def run():
             proxy = Proxy(recorder)
@@ -150,11 +150,11 @@ def test_buffered_forward_fails_fast():
         assert mock.request_count == 1
 
 
-def test_streaming_fails_fast():
+def test_streaming_fails_fast(tmp_path):
     """Chat path (HTTP error branch): retryable 500 + context body -> passed
     through verbatim (upstream status + body) instead of retried."""
     with _context_mock(status=500) as mock, _context_settings(mock):
-        recorder = Recorder("/tmp/context_streaming.jsonl")
+        recorder = Recorder(tmp_path / "context_streaming.jsonl")
 
         async def run():
             proxy = Proxy(recorder)

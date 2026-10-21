@@ -71,8 +71,8 @@ def test_remediation_names_are_stable():
 # --- ladder composition (helpers) -------------------------------------
 
 
-def test_ladder_ordering():
-    proxy = Proxy(Recorder("/tmp/test_remediation_order.jsonl"))
+def test_ladder_ordering(tmp_path):
+    proxy = Proxy(Recorder(tmp_path / "test_remediation_order.jsonl"))
     with settings_override(
         runaway_reasoning_enabled=True,
         loop_retry_enabled=True,
@@ -90,8 +90,8 @@ def test_ladder_ordering():
     ]
 
 
-def test_ladder_omits_disabled_rungs():
-    proxy = Proxy(Recorder("/tmp/test_remediation_disabled.jsonl"))
+def test_ladder_omits_disabled_rungs(tmp_path):
+    proxy = Proxy(Recorder(tmp_path / "test_remediation_disabled.jsonl"))
     with settings_override(
         runaway_reasoning_enabled=False,
         loop_retry_enabled=False,
@@ -215,7 +215,7 @@ _TOOL_CALL_TURN = [
 ]
 
 
-def test_extract_and_coast_compose_on_one_request():
+def test_extract_and_coast_compose_on_one_request(tmp_path):
     specs = [{"chunks": turn} for turn in [_EMPTY_TURN, _COAST_TURN, _TOOL_CALL_TURN]]
     with MockUpstream(specs) as mock:
         with settings_override(
@@ -229,7 +229,7 @@ def test_extract_and_coast_compose_on_one_request():
             coast_nudge_text=_COAST_TEXT,
             coast_max_attempts=2,
         ):
-            recorder = Recorder("/tmp/test_remediation_compose.jsonl")
+            recorder = Recorder(tmp_path / "test_remediation_compose.jsonl")
             proxy = Proxy(recorder)
             body = json.dumps(_loop_request()).encode()
 
@@ -249,7 +249,7 @@ def test_extract_and_coast_compose_on_one_request():
                 )
                 records = [
                     json.loads(line)
-                    for line in open("/tmp/test_remediation_compose.jsonl")
+                    for line in open(tmp_path / "test_remediation_compose.jsonl")
                     if line.strip()
                 ]
                 return resp, records

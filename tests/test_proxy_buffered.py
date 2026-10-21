@@ -414,7 +414,7 @@ def _http(status: int, body: bytes = b'{"ok": true}', content_type: str = "appli
     return httpx.Response(status, content=body, headers={"content-type": content_type})
 
 
-def _run_forward(handler, *, body: bytes | None = None, **overrides):
+def _run_forward(tmp_path, handler, *, body: bytes | None = None, **overrides):
     """Drive `Proxy.forward` on a non-chat route against a mock httpx transport."""
     transport = httpx.MockTransport(handler)
     with settings_override(
@@ -424,7 +424,7 @@ def _run_forward(handler, *, body: bytes | None = None, **overrides):
         retry_backoff_jitter=False,
         **overrides,
     ):
-        recorder = Recorder("/tmp/proxy_buffered.jsonl")
+        recorder = Recorder(tmp_path / "proxy_buffered.jsonl")
         proxy = Proxy(recorder)
         # Swap in the mock transport so transport errors (connection refused,
         # etc.) can be scripted deterministically without a live server.
@@ -438,16 +438,16 @@ def _run_forward(handler, *, body: bytes | None = None, **overrides):
         return asyncio.run(run())
 
 
-def test_forward_success_passthrough():
+def test_forward_success_passthrough(tmp_path):
     async def handler(request):
         return _http(200, body=b'{"ok": true}')
 
-    resp = _run_forward(handler)
+    resp = _run_forward(tmp_path, handler)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     assert json.loads(resp.body) == {"ok": True}
 
 
-def test_forward_retry_then_success():
+def test_forward_retry_then_success(tmp_path):
     calls = {"n": 0}
 
     async def handler(request):
@@ -456,35 +456,35 @@ def test_forward_retry_then_success():
             return _http(500, body=b'{"error": "boom"}')
         return _http(200, body=b'{"ok": true}')
 
-    resp = _run_forward(handler)
+    resp = _run_forward(tmp_path, handler)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     assert calls["n"] == 2
 
 
-def test_forward_exhausted_retry_returns_502():
+def test_forward_exhausted_retry_returns_502(tmp_path):
     async def handler(request):
         raise httpx.ConnectError("connection refused")
 
-    resp = _run_forward(handler)
+    resp = _run_forward(tmp_path, handler)
     assert resp.status_code == 502, (resp.status_code, resp.body)
     assert json.loads(resp.body) == {"error": "upstream failure"}
 
 
-def test_forward_http_error_passthrough():
+def test_forward_http_error_passthrough(tmp_path):
     async def handler(request):
         return _http(404, body=b'{"error": "not found"}')
 
-    resp = _run_forward(handler)
+    resp = _run_forward(tmp_path, handler)
     assert resp.status_code == 404, (resp.status_code, resp.body)
     assert json.loads(resp.body) == {"error": "not found"}
 
 
-def test_forward_logs_completion_summary(caplog):
+def test_forward_logs_completion_summary(tmp_path, caplog):
     async def handler(request):
         return _http(200, body=b'{"ok": true}')
 
     with caplog.at_level(logging.INFO, logger="llm_gauze.proxy"):
-        resp = _run_forward(handler)
+        resp = _run_forward(tmp_path, handler)
     assert resp.status_code == 200
 
     summaries = [
@@ -500,7 +500,7 @@ def test_forward_logs_completion_summary(caplog):
     assert "outcome=success" in msg
 
 
-def test_forward_completion_duration_spans_retries(caplog):
+def test_forward_completion_duration_spans_retries(tmp_path, caplog):
     """The completion line's `duration` must cover the whole request.
 
     It starts when the request arrives and ends when the final response is
@@ -517,7 +517,7 @@ def test_forward_completion_duration_spans_retries(caplog):
         return _http(200, body=b'{"ok": true}')
 
     with caplog.at_level(logging.INFO, logger="llm_gauze.proxy"):
-        resp = _run_forward(handler)
+        resp = _run_forward(tmp_path, handler)
     assert resp.status_code == 200
     assert calls["n"] == 2
 

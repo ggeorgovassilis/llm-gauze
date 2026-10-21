@@ -55,6 +55,28 @@ def test_parse_stage_rejects_malformed_project_aliases():
         parse_stage("project why=")
     with pytest.raises(ValueError, match="duplicate project field"):
         parse_stage("project id,id=request_id")
+    with pytest.raises(ValueError, match="duplicate project field"):
+        parse_stage("project id,id")
+
+
+def test_parse_stage_rejects_non_numeric_time_window():
+    with pytest.raises(ValueError, match="numeric unix timestamp"):
+        parse_stage("filter since=abc")
+    with pytest.raises(ValueError, match="numeric unix timestamp"):
+        parse_stage("filter until=true")
+
+
+def test_parse_stage_rejects_unknown_digest_options():
+    with pytest.raises(ValueError, match="unknown digest option.*bogus"):
+        parse_stage("digest stuck bogus=1")
+    with pytest.raises(ValueError, match="unknown digest option.*max_texts"):
+        parse_stage("digest narrative max_texts=1000")
+
+
+def test_parse_stage_accepts_documented_digest_options():
+    stage = parse_stage("digest stuck retry_storm_threshold=3 include_idle=true")
+    assert isinstance(stage, Digest)
+    assert stage.options == {"retry_storm_threshold": 3, "include_idle": True}
 
 
 def test_build_pipeline_adds_an_implicit_read(tmp_path):
@@ -191,6 +213,20 @@ def test_cli_reports_unknown_digest(tmp_path, capsys):
         main(["read", str(tmp_path), "|", "digest", "nope"])
     assert exc.value.code == 2
     assert "unknown digest" in capsys.readouterr().err
+
+
+def test_cli_reports_invalid_filter_and_digest_options(tmp_path, capsys):
+    write_recording(tmp_path, sample_records())
+    for spec in (
+        ["filter", "since=abc"],
+        ["digest", "stuck", "bogus=1"],
+    ):
+        with pytest.raises(SystemExit) as exc:
+            main(["read", str(tmp_path), "|", *spec])
+        assert exc.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "numeric unix timestamp" in stderr
+    assert "unknown digest option" in stderr
 
 
 def test_render_formats_dicts_and_streams():

@@ -15,11 +15,13 @@ can pipe it into ``jq`` or read it directly.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import sys
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+from app.analysis.digests import DIGESTS
 from app.analysis.pipeline import Digest, Filter, Pipeline, Project, Read, default_records_path
 
 _FILTER_KEYS = {
@@ -40,6 +42,7 @@ _FILTER_KEYS = {
     "retryable",
 }
 _BOOL_FILTER_KEYS = {"has_tool_calls", "retryable"}
+_TIMESTAMP_FILTER_KEYS = {"since", "until"}
 
 
 def _parse_value(text: str) -> Any:
@@ -108,7 +111,12 @@ def parse_stage(text: str) -> Any:
                 raise ValueError(
                     f"unknown filter {key!r}; choose from {', '.join(sorted(_FILTER_KEYS))}"
                 )
-            grouped.setdefault(key, []).append(_parse_value(value))
+            parsed = _parse_value(value)
+            if key in _TIMESTAMP_FILTER_KEYS and (
+                isinstance(parsed, bool) or not isinstance(parsed, (int, float))
+            ):
+                raise ValueError(f"filter {key!r} requires a numeric unix timestamp, got {value!r}")
+            grouped.setdefault(key, []).append(parsed)
         criteria = {}
         for key, values in grouped.items():
             if key in _BOOL_FILTER_KEYS:
@@ -125,6 +133,8 @@ def parse_stage(text: str) -> Any:
                 if not part:
                     continue
                 if "=" not in part:
+                    if part in projection:
+                        raise ValueError(f"duplicate project field {part!r}")
                     projection[part] = part
                     continue
                 alias, _, path = part.partition("=")
@@ -142,7 +152,21 @@ def parse_stage(text: str) -> Any:
         if not args:
             raise ValueError("digest requires a name: stuck, endpoint, remediation or narrative")
         digest = args[0]
+        if digest not in DIGESTS:
+            raise ValueError(f"unknown digest {digest!r}; choose from {', '.join(sorted(DIGESTS))}")
         options = {key: _parse_value(value) for key, value in _pairs(args[1:])}
+        allowed = {
+            name
+            for name, parameter in inspect.signature(DIGESTS[digest]).parameters.items()
+            if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        }
+        unknown = sorted(set(options) - allowed)
+        if unknown:
+            choices = ", ".join(sorted(allowed)) or "none"
+            raise ValueError(
+                f"unknown digest option(s) {', '.join(unknown)} for {digest!r}; "
+                f"choose from {choices}"
+            )
         return Digest(digest, **options)
     raise ValueError(f"unknown pipeline stage {name!r}; choose read, filter, project or digest")
 

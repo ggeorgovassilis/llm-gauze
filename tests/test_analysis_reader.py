@@ -115,7 +115,7 @@ def test_zero_filled_and_truncated_tail_is_tolerated(tmp_path):
     assert [record["id"] for record in read_records(live)] == ["good"]
 
 
-def test_zero_bytes_inside_a_line_are_stripped(tmp_path):
+def test_trailing_zero_bytes_are_stripped(tmp_path):
     live = tmp_path / "records.jsonl"
     live.write_bytes(json.dumps(_record("good", 1.0)).encode() + b"\x00\x00\n")
     assert [record["id"] for record in read_records(live)] == ["good"]

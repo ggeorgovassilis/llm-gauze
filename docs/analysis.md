@@ -37,7 +37,9 @@ read | filter … | project … | digest …
   are not record fields, so run the digest to get them.
 - **`digest`** — one of the four ready-made summaries below. A digest must be
   the last stage. Options are `key=value` pairs, e.g.
-  `digest narrative max_text=1000`.
+  `digest narrative max_text=1000`. Unknown option names are a usage error.
+  `stuck` accepts `retry_storm_threshold=<n>` (default `1`) to decide how many
+  retries count as a retry storm.
 
 Output is JSON (`--format json`, pretty by default, `--compact` for one line)
 or JSONL (`--format jsonl`, one record per line). Nothing is prose.
@@ -94,7 +96,8 @@ scripts/analyse-records 'read | filter abort_kind=stalled | project id,request_i
 
 Choose a recording with `--records <path/to/records.jsonl>` (rotated siblings
 are discovered automatically), `--data-dir <dir>`, or the `DATA_DIR` /
-`RECORD_FILE` environment variables.
+`RECORD_FILE` environment variables. Pass `--no-rotated` to read only the live
+`records.jsonl` and ignore rotated siblings.
 
 ## Python API
 

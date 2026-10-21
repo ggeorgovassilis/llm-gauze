@@ -144,7 +144,7 @@ rather than editing the proxy.
 The recorder's JSONL store is only useful if it can be read back quickly.
 `app/analysis/` therefore provides small, composable stages over the record
 stream — `read` (rotated files + live file, chronological, tolerant of a torn
-tail), `filter` (outcome/status/error/reason/verdict/path/time/rung/tool
+tail), `filter` (outcome/status/error/reason/abort_kind/path/time/rung/tool
 calls), `project` (reduce to the fields a question needs), and `digest` — plus
 four ready-made digests: `stuck`, `endpoint`, `remediation` and `narrative`.
 Stages compose in Python (`Read(...) | Filter(...) | Digest(...)`) and in the

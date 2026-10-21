@@ -32,6 +32,25 @@ def test_build_pipeline_parses_filter_project_and_digest(tmp_path):
     assert pipeline.stages[3].name == "endpoint"
 
 
+def test_parse_stage_projects_aliases_as_a_mapping():
+    stage = parse_stage("project id,why=diagnosis.reason")
+    assert isinstance(stage, Project)
+    assert stage.fields == {"id": "id", "why": "diagnosis.reason"}
+
+    alias_only = parse_stage("project why=diagnosis.reason")
+    assert isinstance(alias_only, Project)
+    assert alias_only.fields == {"why": "diagnosis.reason"}
+
+
+def test_parse_stage_rejects_malformed_project_aliases():
+    with pytest.raises(ValueError, match="alias=path"):
+        parse_stage("project =diagnosis.reason")
+    with pytest.raises(ValueError, match="alias=path"):
+        parse_stage("project why=")
+    with pytest.raises(ValueError, match="duplicate project field"):
+        parse_stage("project id,id=request_id")
+
+
 def test_build_pipeline_adds_an_implicit_read(tmp_path):
     pipeline = build_pipeline("filter kind=abort | digest stuck", records=tmp_path)
     assert isinstance(pipeline.stages[0], Read)
@@ -83,6 +102,19 @@ def test_cli_filter_and_project_outputs_jsonl(tmp_path, capsys):
     record = json.loads(output)
     assert record["outcome"] == "upstream_failure"
     assert record["diagnosis.reason"].startswith("transient upstream error")
+
+
+def test_cli_project_alias_renames_dotted_paths(tmp_path, capsys):
+    code = _run(
+        tmp_path,
+        "| filter outcome=upstream_failure | project why=diagnosis.reason,id",
+        "--format",
+        "jsonl",
+    )
+    assert code == 0
+    record = json.loads(capsys.readouterr().out.strip())
+    assert set(record) == {"why", "id"}
+    assert record["why"].startswith("transient upstream error")
 
 
 def test_cli_digest_outputs_json(tmp_path, capsys):

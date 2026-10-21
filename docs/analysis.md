@@ -31,8 +31,10 @@ read | filter … | project … | digest …
   `request_id`, `kind`, `retryable`. Paths and queries are glob-matched when
   the pattern contains `*`, `?` or `[`, and compared exactly otherwise.
 - **`project`** — reduce each record to the listed fields. Fields are dotted
-  paths (`diagnosis.reason`); `alias=path` renames. Missing paths are emitted
-  as `null`.
+  paths into the raw record (`diagnosis.reason`); `alias=path` renames, e.g.
+  `project id,why=diagnosis.reason`. Missing paths are emitted as `null`.
+  Values that a digest computes (such as `stuck`'s `partial_content_chars`)
+  are not record fields, so run the digest to get them.
 - **`digest`** — one of the four ready-made summaries below. A digest must be
   the last stage. Options are `key=value` pairs, e.g.
   `digest narrative max_text=1000`.
@@ -87,7 +89,7 @@ scripts/analyse-records 'read | filter request_id=2c4dd7926c4c4e4fa9f1a90032185b
 scripts/analyse-records 'read | digest narrative' --format jsonl
 
 # A small projection instead of whole bodies
-scripts/analyse-records 'read | filter abort_kind=stalled | project id,request_id,abort_reason,partial_content_chars'
+scripts/analyse-records 'read | filter abort_kind=stalled | project id,request_id,abort_kind,abort_reason,abort_stream'
 ```
 
 Choose a recording with `--records <path/to/records.jsonl>` (rotated siblings

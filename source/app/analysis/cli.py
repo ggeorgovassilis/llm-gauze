@@ -117,14 +117,27 @@ def parse_stage(text: str) -> Any:
                 criteria[key] = _collapse(values)
         return Filter(**criteria)
     if name == "project":
-        fields = []
+        projection: dict[str, str] = {}
+        has_alias = False
         for token in args:
             for part in token.split(","):
-                if part.strip():
-                    fields.append(part.strip())
-        if not fields:
+                part = part.strip()
+                if not part:
+                    continue
+                if "=" not in part:
+                    projection[part] = part
+                    continue
+                alias, _, path = part.partition("=")
+                alias, path = alias.strip(), path.strip()
+                if not alias or not path:
+                    raise ValueError(f"expected alias=path in project stage: {part!r}")
+                if alias in projection:
+                    raise ValueError(f"duplicate project field {alias!r}")
+                projection[alias] = path
+                has_alias = True
+        if not projection:
             raise ValueError("project requires at least one field")
-        return Project(fields)
+        return Project(projection if has_alias else list(projection))
     if name == "digest":
         if not args:
             raise ValueError("digest requires a name: stuck, endpoint, remediation or narrative")

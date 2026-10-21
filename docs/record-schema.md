@@ -86,6 +86,22 @@ request body for auditability (`runaway.resubmitted_body`,
 `loop_retry.resubmitted_body`) or the pass counters
 (`extract`/`coast`/`empty_stop`).
 
+## Remediation summary on the final success record
+
+When the ladder finalises a turn (`outcome: "success"`), the record carries a
+whole-ladder summary in addition to the per-rung nested blocks:
+
+| Field | Meaning |
+| --- | --- |
+| `rounds` | Total re-submissions fired across all rungs for this request. |
+| `remediation_seconds` | Wall-clock seconds spent in the remediation phase, rounded to milliseconds. |
+| `remediation_exhausted` | Which whole-ladder cap tripped — `"rounds"` or `"time"` — or `null` when the ladder stopped because no rung fired. |
+
+These mirror the two per-request caps (`max_remediation_rounds` /
+`max_remediation_seconds`) and make cap trips observable on the record,
+alongside the `remediation_rounds_exhausted_total` /
+`remediation_time_exhausted_total` telemetry counters.
+
 ## Abort records
 
 A verdict that terminates the request (loop, stall, runaway) records the

@@ -81,6 +81,16 @@ therefore "implement and register" (append a `Remediation` subclass to the
 ladder), not "edit the loop". `Transform` classes (`ThinkContentGuard`,
 `ToolCallGuard`, `MessageOverflowGuard`) share a sibling protocol: a canonical
 `apply` that rewrites a value and reports its mutations, never re-submitting.
+
+The whole ladder is also bounded by two per-request caps — `max_remediation_rounds`
+re-submissions across all rungs and a `max_remediation_seconds` wall-clock
+budget — so a cross-rung ping-pong or a slow model cannot spin past a readable
+ceiling. The wall-clock deadline is fixed once per request
+(`started + max_remediation_seconds`); when a rung would fire but a cap has been
+reached, the ladder treats it as "no rung fires" and finalises the assembled
+turn (success, with the placeholder floor if the turn is empty). These caps are
+a loop-level guard layered over the ladder rather than a new rung, so they do
+not change the "implement and register" contract.
 - `app/remediation/retry.py` — `RetryableDetector` (transient exceptions +
   retryable HTTP statuses) and `ExponentialBackoff` (with optional jitter).
 - `app/remediation/loop.py` — `ThinkingLoopDetector`, a stateful

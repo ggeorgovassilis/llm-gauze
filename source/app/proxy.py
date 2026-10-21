@@ -12,6 +12,7 @@ import logging
 import time
 import traceback
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import httpx
@@ -436,6 +437,26 @@ def _remediation_outcome(
     return None
 
 
+def _remediation_exhausted(
+    rounds: int,
+    max_rounds: int,
+    deadline: float,
+    now: float | None = None,
+) -> str | None:
+    """Return which whole-ladder cap trips, or ``None`` if remediation may continue.
+
+    ``rounds`` is the number of re-submissions already fired across all rungs;
+    ``deadline`` is ``started + max_remediation_seconds``. When both caps would
+    trip on the same turn the rounds cap wins, keeping the order of the two
+    knobs deterministic.
+    """
+    if rounds >= max_rounds:
+        return "rounds"
+    if (now if now is not None else time.time()) >= deadline:
+        return "time"
+    return None
+
+
 class Proxy:
     """Forwards requests to the upstream, retrying transient failures."""
 
@@ -711,6 +732,7 @@ class Proxy:
         headers: dict,
         base_entry: dict,
         started: float | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> Response:
         """Stream the upstream response; drive the remediation ladder.
 
@@ -725,13 +747,20 @@ class Proxy:
         re-submits; when no rung fires the outcome is final (abort on a
         verdict, or finalise the assembled turn). A *stall* is never remediated
         — retrying just re-waits for a silent model.
+
+        Two whole-ladder caps (``max_remediation_rounds`` re-submissions and a
+        ``max_remediation_seconds`` wall-clock deadline) guarantee termination
+        even when the per-rung budgets would otherwise allow a cross-rung
+        ping-pong to continue. When a rung would fire but a cap is reached, the
+        ladder treats it as "no rung fires" and finalises success.
         """
         # `_ensure_stream` rewrites the body (stream forced on, JSON
         # re-serialised), so any inbound Content-Length is stale. Drop it and
         # let httpx recompute it from the actual body; forwarding the stale
         # value makes h11 raise "Too much data for declared Content-Length".
+        clock = clock or time.time
         if started is None:
-            started = time.time()
+            started = clock()
         out_headers = {k: v for k, v in headers.items() if k.lower() != "content-length"}
         content_type = _ensure_stream(body)[1]
         if content_type:
@@ -744,6 +773,8 @@ class Proxy:
         guard = ThinkContentGuard.from_settings() if settings.think_cleanup_enabled else None
         ladder = self._build_remediation_ladder()
         attempts: dict[str, int] = {step.name: 0 for step in ladder}
+        rounds = 0
+        deadline = started + settings.max_remediation_seconds
 
         current_body = body
         while True:
@@ -771,25 +802,31 @@ class Proxy:
             )
 
             step = _first_applicable_step(ladder, attempts, turn, request_payload)
+            remediation_exhausted = None
             if step is not None:
-                logger.warning(
-                    "remediation triggered: %s (attempt %d/%d)",
-                    step.name,
-                    attempts[step.name] + 1,
-                    step.max_attempts,
+                remediation_exhausted = _remediation_exhausted(
+                    rounds, settings.max_remediation_rounds, deadline, clock()
                 )
-                resubmitted = step.apply(turn, request_payload)
-                await self._record_remediation_pass(
-                    step,
-                    base_entry,
-                    result,
-                    client_wants_stream,
-                    attempts[step.name],
-                    resubmitted,
-                )
-                attempts[step.name] += 1
-                current_body = json.dumps(resubmitted).encode("utf-8")
-                continue
+                if remediation_exhausted is None:
+                    logger.warning(
+                        "remediation triggered: %s (attempt %d/%d)",
+                        step.name,
+                        attempts[step.name] + 1,
+                        step.max_attempts,
+                    )
+                    resubmitted = step.apply(turn, request_payload)
+                    await self._record_remediation_pass(
+                        step,
+                        base_entry,
+                        result,
+                        client_wants_stream,
+                        attempts[step.name],
+                        resubmitted,
+                    )
+                    attempts[step.name] += 1
+                    rounds += 1
+                    current_body = json.dumps(resubmitted).encode("utf-8")
+                    continue
 
             # No rung fired: the outcome is final. A verdict (loop/stall/
             # runaway) aborts; a clean turn is finalised (extract/coast floors).
@@ -807,7 +844,7 @@ class Proxy:
                     url,
                     resp.status_code,
                     result.outcome or "unknown",
-                    time.time() - started,
+                    clock() - started,
                 )
                 logger.debug(
                     "response status=%s headers=%r body=%r",
@@ -837,8 +874,11 @@ class Proxy:
                 coast_outcome,
                 attempts.get("empty_stop", 0),
                 empty_stop_outcome,
+                rounds,
+                clock() - started,
+                remediation_exhausted,
             )
-            self._log_completion(method, url, resp.status_code, "success", time.time() - started)
+            self._log_completion(method, url, resp.status_code, "success", clock() - started)
             logger.debug(
                 "response status=%s headers=%r body=%r",
                 resp.status_code,
@@ -1309,6 +1349,9 @@ class Proxy:
         coast_outcome: str | None,
         empty_stop_attempt: int,
         empty_stop_outcome: str | None,
+        rounds: int,
+        remediation_seconds: float,
+        remediation_exhausted: str | None,
     ) -> Response:
         """Apply the placeholder floor, record, and return the final response."""
         content = result.content
@@ -1366,6 +1409,11 @@ class Proxy:
         if empty_stop_outcome == "exhausted":
             telemetry.incr("empty_stop_aborts_total")
 
+        if remediation_exhausted == "rounds":
+            telemetry.incr("remediation_rounds_exhausted_total")
+        elif remediation_exhausted == "time":
+            telemetry.incr("remediation_time_exhausted_total")
+
         await self.recorder.record(
             {
                 **base_entry,
@@ -1381,6 +1429,9 @@ class Proxy:
                 "extract": extract_entry,
                 "coast": coast_entry,
                 "empty_stop": empty_stop_entry,
+                "rounds": rounds,
+                "remediation_seconds": round(remediation_seconds, 3),
+                "remediation_exhausted": remediation_exhausted,
                 "diagnosis": None,
                 "duration": result.duration,
             }

@@ -11,10 +11,12 @@ foreign-tool-call pass-through case.
 import asyncio
 import json
 
+from app.config import settings
 from app.proxy import Proxy
 from app.recorder import Recorder
 from app.remediation.base import Turn
 from app.remediation.extract import RESOURCE_NAME, ExtractionPolicy
+from app.telemetry import telemetry
 from mock_upstream import MockUpstream, chunk, settings_override
 
 _INSTRUCTION = "PLEASE_PAGE_AND_ANSWER"
@@ -391,3 +393,62 @@ def test_large_reasoning_is_never_resubmitted_in_full():
     # The full stream must never appear in any single upstream request.
     for body in bodies:
         assert big not in json.dumps(body), body
+
+
+def test_extract_active_watchdog_abort_increments_telemetry():
+    # A seeded extraction rung (first turn) followed by a visible-content loop
+    # that the loop watchdog terminates. The abort must count against
+    # `extract_aborts_total` because the extraction rung is still active.
+    sentence = "Let me carefully reconsider the whole approach before continuing."
+    loop_turn = [
+        _chunk({"role": "assistant", "content": ""}),
+        *[_chunk({"content": sentence + ". "}) for _ in range(40)],
+        _chunk({}, finish_reason="stop"),
+    ]
+    specs = [{"chunks": _THINK_TURN}, {"chunks": loop_turn}]
+    before = telemetry.snapshot()["counters"].get("extract_aborts_total", 0)
+    with MockUpstream(specs) as mock:
+        with settings_override(
+            llm_base_url=mock.url,
+            loop_detection_enabled=True,
+            stall_detection_enabled=False,
+            runaway_reasoning_enabled=False,
+            think_cleanup_enabled=True,
+            think_empty_response_placeholder=_PLACEHOLDER,
+            extract_enabled=True,
+            extract_instruction_text=_INSTRUCTION,
+            extract_max_attempts=3,
+            coast_detection_enabled=False,
+            tool_call_guard_enabled=False,
+            loop_retry_enabled=False,
+            loop_window_bytes=2000,
+            loop_min_output_fraction=0.5,
+        ):
+            recorder = Recorder("/tmp/extract_loop_integration.jsonl")
+            proxy = Proxy(recorder)
+            body = json.dumps(
+                {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
+            ).encode()
+
+            async def run():
+                return await proxy._forward_streaming(
+                    request_id="extract-loop-itest",
+                    method="POST",
+                    url="/v1/chat/completions",
+                    query="",
+                    body=body,
+                    headers={"content-type": "application/json"},
+                    base_entry={
+                        "request_id": "extract-loop-itest",
+                        "method": "POST",
+                        "path": "/v1/chat/completions",
+                    },
+                )
+
+            resp = asyncio.run(run())
+    after = telemetry.snapshot()["counters"].get("extract_aborts_total", 0)
+    assert after == before + 1, (before, after)
+
+    assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
+    data = json.loads(resp.body)
+    assert data["error"]["type"] == "loop_detected", data

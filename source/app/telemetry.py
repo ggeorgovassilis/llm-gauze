@@ -39,7 +39,7 @@ _METRICS = {
     ),
     "extract_aborts_total": (
         "counter",
-        "Extraction runs that exhausted their budget and fell back.",
+        "Extraction runs aborted, by watchdog verdict or budget exhaustion.",
     ),
     "empty_stop_aborts_total": (
         "counter",

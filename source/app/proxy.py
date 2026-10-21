@@ -795,6 +795,13 @@ class Proxy:
             # runaway) aborts; a clean turn is finalised (extract/coast floors).
             if result.response is not None:
                 resp = result.response
+                if result.loop_verdict is not None:
+                    extract_step = _find_step(ladder, "extract")
+                    if (
+                        isinstance(extract_step, ExtractionPolicy)
+                        and extract_step.last_mode is not None
+                    ):
+                        telemetry.incr("extract_aborts_total")
                 self._log_completion(
                     method,
                     url,

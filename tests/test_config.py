@@ -47,6 +47,8 @@ def test_defaults_are_valid():
         ("context_window_abort_status", 0),
         ("runaway_reasoning_token_threshold", 0),
         ("runaway_reasoning_abort_status", 42),
+        ("max_remediation_rounds", 0),
+        ("max_remediation_seconds", 0),
         ("message_overflow_threshold", 0),
         ("extract_tool_name", ""),
         ("extract_max_attempts", -1),

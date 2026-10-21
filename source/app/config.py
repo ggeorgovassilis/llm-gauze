@@ -565,6 +565,29 @@ class Settings(BaseSettings):
         le=599,
     )
 
+    # --- Remediation ladder (whole-request caps) ----------------------
+    # Belt-and-braces termination guarantee for the remediation ladder. The
+    # per-rung ``max_attempts`` budgets already bound each rung; these two caps
+    # additionally bound the *whole* ladder per request so a cross-rung
+    # ping-pong (or a slow model) cannot spin past a single, readable ceiling.
+    # Both are counted over the entire ladder, not per rung.
+    max_remediation_rounds: int = _field(
+        16,
+        "Maximum total remediation re-submissions across all rungs, per request.",
+        "Remediation ladder",
+        ge=1,
+    )
+
+    # Wall-clock budget, in seconds, for the whole remediation phase. The
+    # deadline is computed once (started + max_remediation_seconds) and the
+    # ladder stops re-firing once it is reached.
+    max_remediation_seconds: float = _field(
+        300.0,
+        "Wall-clock budget, in seconds, for the whole remediation phase.",
+        "Remediation ladder",
+        gt=0,
+    )
+
     # --- Message-overflow protection (oversized tool results) ---------
     # Master switch for warning (and optionally truncating) oversized
     # ``role: "tool"`` results before forwarding the request upstream. A single

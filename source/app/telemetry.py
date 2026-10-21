@@ -45,6 +45,14 @@ _METRICS = {
         "counter",
         "Empty-stop runs that exhausted their budget and fell back.",
     ),
+    "remediation_rounds_exhausted_total": (
+        "counter",
+        "Remediation ladders stopped by the whole-ladder rounds cap.",
+    ),
+    "remediation_time_exhausted_total": (
+        "counter",
+        "Remediation ladders stopped by the whole-ladder wall-clock cap.",
+    ),
     "upstream_latency_seconds": ("histogram", "Upstream response latency."),
     "upstream_down": ("gauge", "Whether the upstream is currently failing."),
 }

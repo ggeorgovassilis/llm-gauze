@@ -128,6 +128,13 @@ below, grouped by feature, with its default.
 | `RUNAWAY_REASONING_MAX_ATTEMPTS` | `2` | Max runaway re-submissions before aborting the request. |
 | `RUNAWAY_REASONING_ABORT_STATUS` | `502` | HTTP status returned when a runaway turn is detected and every re-submission also ran away. |
 
+## Remediation ladder
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MAX_REMEDIATION_ROUNDS` | `16` | Maximum total remediation re-submissions across all rungs, per request. |
+| `MAX_REMEDIATION_SECONDS` | `300` | Wall-clock budget, in seconds, for the whole remediation phase. |
+
 ## Message overflow
 
 | Variable | Default | Description |

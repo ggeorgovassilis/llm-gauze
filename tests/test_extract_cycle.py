@@ -149,8 +149,9 @@ def test_full_extraction_cycle_pages_reasoning_to_decision(tmp_path):
     assert message["content"] == _DECISION, message
 
     # Exact upstream request count: initial (p1) + seed (p2) + two read-exec
-    # re-submissions (p3). The decision (p4) is the response to the second
-    # read-exec request, so it does not add a further upstream request.
+    # re-submissions triggered by the p3 read turns. The decision (p4) is the
+    # response to the second read-exec request, so it does not add a further
+    # upstream request.
     assert count == 4, count
 
     # The full reasoning stream must never appear in any single captured

@@ -276,25 +276,28 @@ chain-of-thought and surface real output. This is the first rung of the
 empty-response ladder (`extract → placeholder floor`).
 
 Rather than re-feeding the full reasoning stream (which could be enormous) as
-context, the policy injects a namespaced read tool, `gauze_read`, and a short
-instruction that asks the model to page through the relocated reasoning in
-bounded windows. The state machine has two modes:
+context, the policy injects a namespaced read tool (`EXTRACT_TOOL_NAME`,
+default `gauze_read`) and a short instruction that asks the model to page
+through the relocated reasoning in bounded windows. Each page window is capped
+at `EXTRACT_MAX_WINDOW_LINES`. The state machine has two modes:
 
 - **Seed** — fired when a turn matches the empty-reasoning-only shape. The
-  policy appends a system message defining the `gauze_read` tool
+  policy appends a system message defining the read tool
   (`resource`, `line_from`, `line_count`) and a user turn carrying the
   `EXTRACT_INSTRUCTION_TEXT`. The captured reasoning is held in policy state and is
   *never* embedded in the request body.
-- **Read-exec** — fired when the model answers with a `gauze_read` tool call.
-  The policy reads the requested line window from its held resource and
-  appends the slice as the tool result; foreign or mixed tool calls are passed
-  through untouched. The model eventually produces a visible answer (or the
-  budget is spent and the placeholder floor applies).
+- **Read-exec** — fired when the model answers with a read-tool call.
+  The policy reads the requested line window from its held resource (clamped
+  to `EXTRACT_MAX_WINDOW_LINES`) and appends the slice as the tool result;
+  foreign or mixed tool calls are passed through untouched. The model
+  eventually produces a visible answer (or the budget is spent and the
+  placeholder floor applies).
 
 - `ExtractionPolicy.applies(turn, body)` dispatches to the seed predicate
   (stop + empty content + no tool calls + non-empty reasoning, with no resource
   yet held) or the read-exec predicate (a held resource and a turn whose tool
-  calls are *exclusively* `gauze_read`). Deterministic — no heuristics.
+  calls are *exclusively* the configured read tool, matched by exact name).
+  Deterministic — no heuristics.
 - `ExtractionPolicy.apply(turn, body)` mutates a *copy* of the request; the
   input is never modified.
 - The re-submitted request reuses the streaming path unchanged; the budget is
@@ -305,8 +308,8 @@ bounded windows. The state machine has two modes:
   the client still receives a non-empty turn, and an `extract_aborts_total`
   counter is incremented.
 
-The namespaced `gauze_read` tool is defined but never exposed to the upstream
-model's own tool routing: only the extraction rung references it.
+The namespaced read tool is defined but never exposed to the upstream model's
+own tool routing: only the extraction rung references it.
 
 ## Coast detection
 

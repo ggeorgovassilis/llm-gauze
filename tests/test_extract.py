@@ -227,6 +227,13 @@ def test_configured_tool_name_is_appended_on_seed():
     assert out["tools"][-1]["function"]["name"] == "custom_read"
 
 
+def test_from_settings_propagates_configured_tool_name_and_window():
+    with settings_override(extract_tool_name="custom_read", extract_max_window_lines=7):
+        p = ExtractionPolicy.from_settings()
+        assert p.tool_name == "custom_read"
+        assert p.max_window_lines == 7
+
+
 def test_read_slice_clamps_line_count_to_max_window():
     p = _policy(max_window_lines=3)
     p.apply(Turn(finish_reason="stop", reasoning="a\nb\nc\nd\ne"), {})

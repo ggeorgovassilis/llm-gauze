@@ -8,9 +8,10 @@ full stream as context would re-spend the context window — leaving no room to
 answer.
 
 Extraction instead treats the model's own reasoning as a *resource* and lets the
-model page through it in bounded windows via a namespaced ``gauze_read`` tool
-call. The answer is already in the reasoning; the model reads it back rather
-than re-thinking it. The full stream never appears in any single request.
+model page through it in bounded windows via a namespaced read tool (the
+configured ``settings.extract_tool_name``, ``gauze_read`` by default). The
+answer is already in the reasoning; the model reads it back rather than
+re-thinking it. The full stream never appears in any single request.
 
 This replaces the old nudge rung: where nudge blindly re-prompted, extraction
 carries the reasoning forward. The state machine is:
@@ -19,12 +20,11 @@ carries the reasoning forward. The state machine is:
 
 * **Seed** — a think-only turn (stop, empty content, no tool call, non-empty
   reasoning) captures the reasoning as the resource, appends the extraction
-  instruction as a ``user`` message, and appends the ``gauze_read`` tool
-  definition to ``request_body["tools"]`` (added, never replacing the client's
-  tools).
-* **Read-exec** — a turn whose ``tool_calls`` are *exclusively* ``gauze_read``
-  slices the resource by line per call and replays the assistant tool-call
-  message plus the matching ``role: "tool"`` result(s).
+  instruction as a ``user`` message, and appends the read tool definition to
+  ``request_body["tools"]`` (added, never replacing the client's tools).
+* **Read-exec** — a turn whose ``tool_calls`` are *exclusively* the configured
+  read tool slices the resource by line per call and replays the assistant
+  tool-call message plus the matching ``role: "tool"`` result(s).
 
 The ladder is constructed fresh per request, so per-request state on the rung
 is safe. Only the standard library is used, so the policy is pure and
@@ -51,11 +51,11 @@ def _to_int(value, default: int) -> int:
 
 
 class ExtractionPolicy(Remediation):
-    """Recover a visible answer from the reasoning via ``gauze_read`` paging.
+    """Recover a visible answer from the reasoning by paging it with the read tool.
 
     ``applies``/``apply`` dispatch on the turn's shape: a think-only turn seeds
-    the resource, and a ``gauze_read``-only tool-call turn executes a read.
-    Both consume the rung's shared ``max_attempts`` budget, exactly like
+    the resource, and a read-tool-only tool-call turn executes a read. Both
+    consume the rung's shared ``max_attempts`` budget, exactly like
     nudge/coast.
     """
 
@@ -94,8 +94,8 @@ class ExtractionPolicy(Remediation):
         """The ladder's trigger: seed a think-only turn or execute a read.
 
         Read-exec fires only once seeded (the resource exists), and only when
-        the turn's tool calls are *exclusively* ``gauze_read`` — a foreign
-        (client) tool call is passed through untouched.
+        the turn's tool calls are *exclusively* the configured read tool — a
+        foreign (client) tool call is passed through untouched.
         """
         if self._resource is not None and self._is_read_exec(turn):
             return True
@@ -112,11 +112,11 @@ class ExtractionPolicy(Remediation):
         )
 
     def _is_read_exec(self, turn: Turn) -> bool:
-        """True when the turn's tool calls are all ``gauze_read`` (and non-empty)."""
+        """True when the turn's tool calls are all the read tool (and non-empty)."""
         calls = turn.tool_calls
-        return bool(calls) and all(self._is_gauze_read(c) for c in calls)
+        return bool(calls) and all(self._is_read_call(c) for c in calls)
 
-    def _is_gauze_read(self, call) -> bool:
+    def _is_read_call(self, call) -> bool:
         return (
             isinstance(call, dict)
             and isinstance(call.get("function"), dict)
@@ -136,7 +136,7 @@ class ExtractionPolicy(Remediation):
         return self._seed(turn, request_body)
 
     def _seed(self, turn: Turn, request_body: dict) -> dict:
-        """Capture the reasoning as the resource and register ``gauze_read``."""
+        """Capture the reasoning as the resource and register the read tool."""
         self._resource = turn.reasoning or ""
         self._last_mode = "seed"
         self._last_read_args = None
@@ -152,7 +152,7 @@ class ExtractionPolicy(Remediation):
         return body
 
     def _read_exec(self, turn: Turn, request_body: dict) -> dict:
-        """Slice the resource per ``gauze_read`` call and replay tool messages."""
+        """Slice the resource per read-tool call and replay tool messages."""
         body = dict(request_body)
         messages = list(body.get("messages") or [])
         tool_calls = list(turn.tool_calls or [])
@@ -178,7 +178,7 @@ class ExtractionPolicy(Remediation):
     # --- resource reading ---------------------------------------------
 
     def _parse_args(self, call: dict) -> dict:
-        """Parse a ``gauze_read`` call's ``function.arguments`` into a dict.
+        """Parse a read-tool call's ``function.arguments`` into a dict.
 
         ``ToolCallGuard`` already validated/repaired the JSON, but a model can
         still supply non-object arguments or wrong-typed values, so this is
@@ -212,7 +212,7 @@ class ExtractionPolicy(Remediation):
         return "\n".join(lines[start : start + line_count])
 
     def _tool_definition(self) -> dict:
-        """The ``gauze_read`` function tool definition appended on seed."""
+        """The configured read tool's function definition appended on seed."""
         return {
             "type": "function",
             "function": {
@@ -264,5 +264,5 @@ class ExtractionPolicy(Remediation):
 
     @property
     def last_read_args(self) -> list | None:
-        """Parsed ``gauze_read`` arguments of the most recent read (else None)."""
+        """Parsed read-tool arguments of the most recent read (else None)."""
         return self._last_read_args

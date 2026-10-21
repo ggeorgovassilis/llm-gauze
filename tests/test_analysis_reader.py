@@ -135,6 +135,21 @@ def test_missing_recording_yields_no_records(tmp_path):
     assert read_records(tmp_path / "records.jsonl") == []
 
 
+def test_unrelated_files_next_to_the_recording_are_ignored(tmp_path):
+    (tmp_path / "records-20260101-120000.jsonl").write_text(
+        json.dumps(_record("old", 1.0)) + "\n", encoding="utf-8"
+    )
+    # Not a rotated record file: wrong prefix or wrong suffix.
+    (tmp_path / "other.jsonl").write_text(
+        json.dumps(_record("unrelated", 0.0)) + "\n", encoding="utf-8"
+    )
+    (tmp_path / "records-notes.txt").write_text("not a recording\n", encoding="utf-8")
+    live = tmp_path / "records.jsonl"
+    live.write_text(json.dumps(_record("live", 2.0)) + "\n", encoding="utf-8")
+
+    assert [record["id"] for record in read_records(tmp_path)] == ["old", "live"]
+
+
 def test_record_without_numeric_timestamp_sorts_first(tmp_path):
     live = tmp_path / "records.jsonl"
     live.write_text(
@@ -142,6 +157,18 @@ def test_record_without_numeric_timestamp_sorts_first(tmp_path):
         encoding="utf-8",
     )
     assert [record["id"] for record in read_records(live)] == ["no-ts", "with-ts"]
+
+
+def test_non_numeric_timestamp_does_not_break_the_read(tmp_path):
+    live = tmp_path / "records.jsonl"
+    live.write_text(
+        json.dumps(_record("bad-ts", "not-a-time"))
+        + "\n"
+        + json.dumps(_record("with-ts", 1.0))
+        + "\n",
+        encoding="utf-8",
+    )
+    assert [record["id"] for record in read_records(live)] == ["bad-ts", "with-ts"]
 
 
 def test_unreadable_file_does_not_abort_the_read(tmp_path, monkeypatch):

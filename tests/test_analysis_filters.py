@@ -66,7 +66,8 @@ def test_record_kind_disambiguates_overloaded_outcomes():
     assert record_kind(loop_abort) == "abort"
     assert record_kind(loop_pass) == "pass"
     assert record_kind(plain_success) == "attempt"
-    assert kinds  # every record classified without raising
+    # Every record in the sample classifies into a known kind.
+    assert set(kinds.values()) == {"attempt", "abort", "pass", "final"}
 
 
 def test_is_helpers_and_pass_rung():
@@ -134,6 +135,15 @@ def test_filter_disambiguates_aborts_passes_and_errors():
         "context_window_exceeded",
     }
 
+    # kind=success selects every success outcome, including passes and finals.
+    successes = list(filter_records(records, kind="success"))
+    assert {record["outcome"] for record in successes} == {"success"}
+    assert {record_kind(record) for record in successes} == {
+        "attempt",
+        "pass",
+        "final",
+    }
+
     # The loop outcome appears twice, but only one of them is an abort.
     loop_outcome = list(filter_records(records, outcome="loop_aborted"))
     assert len(loop_outcome) == 2
@@ -166,7 +176,7 @@ def test_filter_by_path_query_time_window_and_attempt():
     )
     assert len(list(filter_records(records, path="/v1/chat/completions"))) == len(records) - 1
     assert _ids(filter_records(records, path="/health")) == ["other"]
-    assert _ids(filter_records(records, path="/v1/*")) != ["other"]
+    assert len(list(filter_records(records, path="/v1/*"))) == len(records) - 1
     assert _ids(filter_records(records, query="verbose=1")) == ["other"]
     assert _ids(filter_records(records, since=1_700_000_100.0)) == ["other"]
     assert _ids(filter_records(records, until=1_700_000_001.0)) == [
@@ -174,6 +184,16 @@ def test_filter_by_path_query_time_window_and_attempt():
         "req-retry-1700000001.0-2-success",
     ]
     assert len(list(filter_records(records, attempt=2))) == 2
+
+
+def test_time_window_excludes_records_with_a_non_numeric_timestamp():
+    records = [
+        {"id": "good", "timestamp": 10.0},
+        {"id": "bad", "timestamp": "yesterday"},
+        {"id": "missing"},
+    ]
+    assert _ids(filter_records(records, since=0)) == ["good"]
+    assert _ids(filter_records(records, until=10.0)) == ["good"]
 
 
 def test_filter_by_request_id_tool_calls_and_predicate():
@@ -228,7 +248,7 @@ def test_pipeline_composes_read_filter_project_and_emits_json(tmp_path):
         "http_error",
         "context_window_exceeded",
     }
-    assert json.loads(json.dumps(records))[0]["request_id"]
+    assert records[0]["request_id"] == "req-retry"
     assert pipeline.records() == records
 
 

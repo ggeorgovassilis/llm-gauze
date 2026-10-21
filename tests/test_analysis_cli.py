@@ -109,6 +109,15 @@ def test_cli_accepts_pipeline_option_and_data_dir(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["digest"] == "remediation"
 
 
+def test_cli_records_option_selects_the_live_file(tmp_path, capsys):
+    write_recording(tmp_path, sample_records())
+    code = main(["--records", str(tmp_path / "records.jsonl"), "read | digest stuck"])
+    assert code == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["digest"] == "stuck"
+    assert summary["totals"]["requests"] == 10
+
+
 def test_cli_no_rotated_reads_only_live(tmp_path, capsys):
     write_recording(
         tmp_path,

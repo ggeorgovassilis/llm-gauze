@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from analysis_samples import sample_records, tool_call, tool_conversation_request
 from app.analysis import endpoint, narrative, remediation, run_digest, stuck
 
@@ -208,12 +209,8 @@ def test_narrative_includes_partial_tool_calls_from_aborts():
 
 
 def test_run_digest_rejects_unknown_names():
-    try:
+    with pytest.raises(ValueError, match="unknown digest"):
         run_digest("nope", [])
-    except ValueError as exc:
-        assert "unknown digest" in str(exc)
-    else:  # pragma: no cover - defensive
-        raise AssertionError("expected ValueError")
 
 
 def test_narrative_handles_multipart_content():
@@ -256,3 +253,44 @@ def test_tool_conversation_without_response_body_is_still_reconstructed():
     summary = narrative([record])
     assert summary["requests"][0]["tool_calls"][0]["name"] == "search"
     assert summary["requests"][0]["tool_calls"][0]["result"] is None
+
+
+def test_narrative_keeps_orphan_tool_results():
+    record = {
+        "id": "x",
+        "timestamp": 1.0,
+        "request_id": "req",
+        "outcome": "success",
+        "request_body": json.dumps(
+            {
+                "messages": [
+                    {"role": "user", "content": "go"},
+                    # A result whose call was trimmed from the history.
+                    {"role": "tool", "tool_call_id": "call_gone", "name": "lookup", "content": "r"},
+                ]
+            }
+        ),
+        "response_body": None,
+    }
+    summary = narrative([record])
+    assert summary["requests"][0]["tool_calls"] == [
+        {
+            "id": "call_gone",
+            "name": "lookup",
+            "arguments": None,
+            "result": "r",
+        }
+    ]
+
+
+def test_narrative_summary_without_a_user_message():
+    record = {
+        "id": "x",
+        "timestamp": 1.0,
+        "request_id": "req",
+        "outcome": "success",
+        "request_body": json.dumps({"messages": [{"role": "assistant", "content": "unprompted"}]}),
+        "response_body": None,
+    }
+    summary = narrative([record])
+    assert "No user message recorded" in summary["requests"][0]["summary"]

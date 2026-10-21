@@ -301,6 +301,54 @@ def _run_forward(chunks_by_request, extract_max=3, stream=False, body=None):
             return resp, records, mock.request_count, mock.json_bodies()
 
 
+def _run_watchdog_abort(specs, tmp_path):
+    """Drive ``_forward_streaming`` over `specs` with extraction and loop
+    detection enabled, returning the response and the ``extract_aborts_total``
+    counter value before and after the run."""
+    before = telemetry.snapshot()["counters"].get("extract_aborts_total", 0)
+    with MockUpstream(specs) as mock:
+        with settings_override(
+            llm_base_url=mock.url,
+            loop_detection_enabled=True,
+            stall_detection_enabled=False,
+            runaway_reasoning_enabled=False,
+            think_cleanup_enabled=True,
+            think_empty_response_placeholder=_PLACEHOLDER,
+            extract_enabled=True,
+            extract_instruction_text=_INSTRUCTION,
+            extract_max_attempts=3,
+            coast_detection_enabled=False,
+            tool_call_guard_enabled=False,
+            loop_retry_enabled=False,
+            loop_window_bytes=2000,
+            loop_min_output_fraction=0.5,
+        ):
+            recorder = Recorder(str(tmp_path / "extract_abort_integration.jsonl"))
+            proxy = Proxy(recorder)
+            body = json.dumps(
+                {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
+            ).encode()
+
+            async def run():
+                return await proxy._forward_streaming(
+                    request_id="extract-abort-itest",
+                    method="POST",
+                    url="/v1/chat/completions",
+                    query="",
+                    body=body,
+                    headers={"content-type": "application/json"},
+                    base_entry={
+                        "request_id": "extract-abort-itest",
+                        "method": "POST",
+                        "path": "/v1/chat/completions",
+                    },
+                )
+
+            resp = asyncio.run(run())
+    after = telemetry.snapshot()["counters"].get("extract_aborts_total", 0)
+    return resp, before, after
+
+
 def test_think_only_turn_is_extracted_and_returns_real_answer():
     resp, records, count, bodies = _run_forward([_THINK_TURN, _read_turn(), _ANSWER_TURN])
     assert resp.status_code == 200, (resp.status_code, resp.body)
@@ -405,48 +453,9 @@ def test_extract_active_watchdog_abort_increments_telemetry(tmp_path):
         *[_chunk({"content": sentence + ". "}) for _ in range(40)],
         _chunk({}, finish_reason="stop"),
     ]
-    specs = [{"chunks": _THINK_TURN}, {"chunks": loop_turn}]
-    before = telemetry.snapshot()["counters"].get("extract_aborts_total", 0)
-    with MockUpstream(specs) as mock:
-        with settings_override(
-            llm_base_url=mock.url,
-            loop_detection_enabled=True,
-            stall_detection_enabled=False,
-            runaway_reasoning_enabled=False,
-            think_cleanup_enabled=True,
-            think_empty_response_placeholder=_PLACEHOLDER,
-            extract_enabled=True,
-            extract_instruction_text=_INSTRUCTION,
-            extract_max_attempts=3,
-            coast_detection_enabled=False,
-            tool_call_guard_enabled=False,
-            loop_retry_enabled=False,
-            loop_window_bytes=2000,
-            loop_min_output_fraction=0.5,
-        ):
-            recorder = Recorder(str(tmp_path / "extract_loop_integration.jsonl"))
-            proxy = Proxy(recorder)
-            body = json.dumps(
-                {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
-            ).encode()
-
-            async def run():
-                return await proxy._forward_streaming(
-                    request_id="extract-loop-itest",
-                    method="POST",
-                    url="/v1/chat/completions",
-                    query="",
-                    body=body,
-                    headers={"content-type": "application/json"},
-                    base_entry={
-                        "request_id": "extract-loop-itest",
-                        "method": "POST",
-                        "path": "/v1/chat/completions",
-                    },
-                )
-
-            resp = asyncio.run(run())
-    after = telemetry.snapshot()["counters"].get("extract_aborts_total", 0)
+    resp, before, after = _run_watchdog_abort(
+        [{"chunks": _THINK_TURN}, {"chunks": loop_turn}], tmp_path
+    )
     assert after == before + 1, (before, after)
 
     assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
@@ -465,52 +474,14 @@ def test_extract_read_exec_watchdog_abort_increments_telemetry(tmp_path):
         *[_chunk({"reasoning_content": sentence + ". "}) for _ in range(40)],
         _chunk({}, finish_reason="stop"),
     ]
-    specs = [
-        {"chunks": _THINK_TURN},
-        {"chunks": _read_turn()},
-        {"chunks": read_loop_turn},
-    ]
-    before = telemetry.snapshot()["counters"].get("extract_aborts_total", 0)
-    with MockUpstream(specs) as mock:
-        with settings_override(
-            llm_base_url=mock.url,
-            loop_detection_enabled=True,
-            stall_detection_enabled=False,
-            runaway_reasoning_enabled=False,
-            think_cleanup_enabled=True,
-            think_empty_response_placeholder=_PLACEHOLDER,
-            extract_enabled=True,
-            extract_instruction_text=_INSTRUCTION,
-            extract_max_attempts=3,
-            coast_detection_enabled=False,
-            tool_call_guard_enabled=False,
-            loop_retry_enabled=False,
-            loop_window_bytes=2000,
-            loop_min_output_fraction=0.5,
-        ):
-            recorder = Recorder(str(tmp_path / "extract_read_loop_integration.jsonl"))
-            proxy = Proxy(recorder)
-            body = json.dumps(
-                {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
-            ).encode()
-
-            async def run():
-                return await proxy._forward_streaming(
-                    request_id="extract-read-loop-itest",
-                    method="POST",
-                    url="/v1/chat/completions",
-                    query="",
-                    body=body,
-                    headers={"content-type": "application/json"},
-                    base_entry={
-                        "request_id": "extract-read-loop-itest",
-                        "method": "POST",
-                        "path": "/v1/chat/completions",
-                    },
-                )
-
-            resp = asyncio.run(run())
-    after = telemetry.snapshot()["counters"].get("extract_aborts_total", 0)
+    resp, before, after = _run_watchdog_abort(
+        [
+            {"chunks": _THINK_TURN},
+            {"chunks": _read_turn()},
+            {"chunks": read_loop_turn},
+        ],
+        tmp_path,
+    )
     assert after == before + 1, (before, after)
 
     assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)

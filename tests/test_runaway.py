@@ -101,7 +101,7 @@ def test_policy_appends_nudge_without_mutation():
 # --- integration harness ---------------------------------------------
 
 
-def _run_forward(chunks_by_request, *, enabled=True, max_attempts=2, loop_retry=False):
+def _run_forward(tmp_path, chunks_by_request, *, enabled=True, max_attempts=2, loop_retry=False):
     specs = [{"chunks": turn} for turn in chunks_by_request]
     with MockUpstream(specs) as mock:
         with settings_override(
@@ -116,7 +116,7 @@ def _run_forward(chunks_by_request, *, enabled=True, max_attempts=2, loop_retry=
             runaway_reasoning_max_attempts=max_attempts,
             runaway_reasoning_token_threshold=2000,
         ):
-            recorder = Recorder("/tmp/runaway_integration.jsonl")
+            recorder = Recorder(tmp_path / "runaway_integration.jsonl")
             proxy = Proxy(recorder)
             body = json.dumps(
                 {"model": "test", "messages": [{"role": "user", "content": "q"}]}
@@ -138,7 +138,7 @@ def _run_forward(chunks_by_request, *, enabled=True, max_attempts=2, loop_retry=
                 )
                 records = [
                     json.loads(line)
-                    for line in open("/tmp/runaway_integration.jsonl")
+                    for line in open(tmp_path / "runaway_integration.jsonl")
                     if line.strip()
                 ]
                 return resp, records
@@ -147,8 +147,8 @@ def _run_forward(chunks_by_request, *, enabled=True, max_attempts=2, loop_retry=
             return resp, records, mock.request_count
 
 
-def test_runaway_turn_is_nudged_and_returns_answer():
-    resp, records, count = _run_forward([_RUNAWAY_TURN, _ANSWER_TURN])
+def test_runaway_turn_is_nudged_and_returns_answer(tmp_path):
+    resp, records, count = _run_forward(tmp_path, [_RUNAWAY_TURN, _ANSWER_TURN])
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     assert "The answer is 42." in data["choices"][0]["message"]["content"]
@@ -160,9 +160,9 @@ def test_runaway_turn_is_nudged_and_returns_answer():
     assert resubmitted["messages"][-1]["content"] == _NUDGE_TEXT
 
 
-def test_runaway_budget_exhausted_aborts():
+def test_runaway_budget_exhausted_aborts(tmp_path):
     resp, records, count = _run_forward(
-        [_RUNAWAY_TURN, _RUNAWAY_TURN, _RUNAWAY_TURN], max_attempts=2
+        tmp_path, [_RUNAWAY_TURN, _RUNAWAY_TURN, _RUNAWAY_TURN], max_attempts=2
     )
     assert resp.status_code == 502, (resp.status_code, resp.body)
     data = json.loads(resp.body)
@@ -170,17 +170,17 @@ def test_runaway_budget_exhausted_aborts():
     assert count == 3, count
 
 
-def test_content_producing_turn_never_flagged():
-    resp, records, count = _run_forward([_ANSWER_TURN])
+def test_content_producing_turn_never_flagged(tmp_path):
+    resp, records, count = _run_forward(tmp_path, [_ANSWER_TURN])
     assert resp.status_code == 200, (resp.status_code, resp.body)
     assert count == 1, count
     assert not any(r.get("runaway") for r in records), records
 
 
-def test_disabled_terminal_turn_is_plain_loop():
+def test_disabled_terminal_turn_is_plain_loop(tmp_path):
     # With the runaway feature off, a reasoning-only length turn falls back to
     # the generic loop verdict (and, with loop-retry also off, aborts as loop).
-    resp, records, count = _run_forward([_RUNAWAY_TURN], enabled=False, loop_retry=False)
+    resp, records, count = _run_forward(tmp_path, [_RUNAWAY_TURN], enabled=False, loop_retry=False)
     assert resp.status_code == 502, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     assert data["error"]["type"] == "loop_detected", data

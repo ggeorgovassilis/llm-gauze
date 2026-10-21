@@ -16,7 +16,7 @@ from mock_upstream import MockUpstream, chunk, settings_override
 _chunk = chunk
 
 
-def _run_forward(chunks):
+def _run_forward(tmp_path, chunks):
     with MockUpstream([{"chunks": chunks}]) as mock:
         with settings_override(
             llm_base_url=mock.url,
@@ -28,7 +28,7 @@ def _run_forward(chunks):
             loop_window_bytes=2000,
             loop_min_output_fraction=0.5,
         ):
-            recorder = Recorder("/tmp/loop_integration.jsonl")
+            recorder = Recorder(tmp_path / "loop_integration.jsonl")
             proxy = Proxy(recorder)
             body = json.dumps(
                 {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
@@ -52,7 +52,7 @@ def _run_forward(chunks):
             return asyncio.run(run())
 
 
-def test_loop_abort():
+def test_loop_abort(tmp_path):
     sentence = "Let me carefully reconsider the whole approach before continuing."
     # Enough repetitions to cross the (small) arming gate set in _run_forward.
     chunks = [
@@ -64,13 +64,13 @@ def test_loop_abort():
             usage={"prompt_tokens": 1, "completion_tokens": 40, "total_tokens": 41},
         ),
     ]
-    resp = _run_forward(chunks)
+    resp = _run_forward(tmp_path, chunks)
     data = json.loads(resp.body)
     assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
     assert data["error"]["type"] == "loop_detected", data
 
 
-def test_finish_reason_length_is_a_loop():
+def test_finish_reason_length_is_a_loop(tmp_path):
     # Regression: a *drift* loop (near-identical, not verbatim) does not trip
     # the compression-ratio detector, so the model runs to the output window
     # limit and the upstream returns ``finish_reason: "length"`` (llama.cpp
@@ -92,7 +92,7 @@ def test_finish_reason_length_is_a_loop():
             usage={"prompt_tokens": 4164, "completion_tokens": 4028, "total_tokens": 8192},
         ),
     ]
-    resp = _run_forward(chunks)
+    resp = _run_forward(tmp_path, chunks)
     data = json.loads(resp.body)
     assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
     assert data["error"]["type"] == "loop_detected", data
@@ -108,7 +108,7 @@ def _loop_chunks():
     ]
 
 
-def _run_forward_sequence(responses):
+def _run_forward_sequence(tmp_path, responses):
     specs = [{"chunks": turn} for turn in responses]
     with MockUpstream(specs) as mock:
         with settings_override(
@@ -119,7 +119,7 @@ def _run_forward_sequence(responses):
             loop_window_bytes=2000,
             loop_min_output_fraction=0.5,
         ):
-            recorder = Recorder("/tmp/loop_retry_integration.jsonl")
+            recorder = Recorder(tmp_path / "loop_retry_integration.jsonl")
             proxy = Proxy(recorder)
             body = json.dumps(
                 {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
@@ -144,14 +144,14 @@ def _run_forward_sequence(responses):
             return resp, mock.json_bodies()
 
 
-def test_loop_retry_breaks_loop():
+def test_loop_retry_breaks_loop(tmp_path):
     """A looped first pass is re-submitted with varied sampling and succeeds."""
     good = [
         _chunk({"role": "assistant", "content": ""}),
         _chunk({"content": "The capital of France is Paris."}),
         _chunk({}, finish_reason="stop"),
     ]
-    resp, bodies = _run_forward_sequence([_loop_chunks(), good])
+    resp, bodies = _run_forward_sequence(tmp_path, [_loop_chunks(), good])
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     assert data["object"] == "chat.completion", data
@@ -167,7 +167,7 @@ def test_loop_retry_breaks_loop():
     # so the overridden sampling is auditable against the client's original.
     recorded = [
         line
-        for line in open("/tmp/loop_retry_integration.jsonl")
+        for line in open(tmp_path / "loop_retry_integration.jsonl")
         if json.loads(line).get("loop_retry")
     ]
     assert recorded, "expected a loop_retry record"
@@ -179,9 +179,9 @@ def test_loop_retry_breaks_loop():
     assert rb["frequency_penalty"] == settings.loop_retry_frequency_penalty, rb
 
 
-def test_loop_retry_exhausts_to_abort():
+def test_loop_retry_exhausts_to_abort(tmp_path):
     """When every re-submission still loops, the request aborts."""
-    resp, bodies = _run_forward_sequence([_loop_chunks(), _loop_chunks(), _loop_chunks()])
+    resp, bodies = _run_forward_sequence(tmp_path, [_loop_chunks(), _loop_chunks(), _loop_chunks()])
     assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     assert data["error"]["type"] == "loop_detected", data
@@ -189,7 +189,7 @@ def test_loop_retry_exhausts_to_abort():
     assert len(bodies) == 3, bodies
 
 
-def test_non_loop_reconstruction():
+def test_non_loop_reconstruction(tmp_path):
     sentences = [
         "The capital of France is Paris.",
         "Water boils at one hundred degrees Celsius.",
@@ -204,7 +204,7 @@ def test_non_loop_reconstruction():
             usage={"prompt_tokens": 5, "completion_tokens": 12, "total_tokens": 17},
         ),
     ]
-    resp = _run_forward(chunks)
+    resp = _run_forward(tmp_path, chunks)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     assert data["object"] == "chat.completion", data
@@ -212,7 +212,7 @@ def test_non_loop_reconstruction():
     assert content == " ".join(sentences) + " ", repr(content)
 
 
-def test_stale_content_length_header():
+def test_stale_content_length_header(tmp_path):
     """Regression: the body is rewritten (stream forced on), so the inbound
     Content-Length no longer matches. Forwarding it verbatim made h11 raise
     ``LocalProtocolError: Too much data for declared Content-Length``; the
@@ -235,7 +235,7 @@ def test_stale_content_length_header():
             llm_base_url=mock.url,
             loop_detection_enabled=True,
         ):
-            recorder = Recorder("/tmp/loop_integration_cl.jsonl")
+            recorder = Recorder(tmp_path / "loop_integration_cl.jsonl")
             proxy = Proxy(recorder)
 
             async def run():
@@ -264,7 +264,7 @@ def test_stale_content_length_header():
     assert data["choices"][0]["message"]["content"] == "".join(sentences), data
 
 
-def test_tool_calls_reconstruction():
+def test_tool_calls_reconstruction(tmp_path):
     """Regression: tool-using turns must carry their ``tool_calls`` through.
 
     Streaming tool calls arrive as fragments (first carries id/name, later
@@ -290,7 +290,7 @@ def test_tool_calls_reconstruction():
         _chunk({"tool_calls": [{"index": 0, "function": {"arguments": 'ation": "Paris"}'}}]}),
         _chunk({}, finish_reason="tool_calls"),
     ]
-    resp = _run_forward(chunks)
+    resp = _run_forward(tmp_path, chunks)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     message = data["choices"][0]["message"]
@@ -308,7 +308,7 @@ def test_tool_calls_reconstruction():
     ], data
 
 
-def test_streaming_passthrough():
+def test_streaming_passthrough(tmp_path):
     """Regression: a ``stream: true`` client must get SSE back, not JSON.
 
     Copilot sends ``stream: true`` and parses the response as SSE ``data:``
@@ -336,7 +336,7 @@ def test_streaming_passthrough():
             llm_base_url=mock.url,
             loop_detection_enabled=True,
         ):
-            recorder = Recorder("/tmp/loop_integration_stream.jsonl")
+            recorder = Recorder(tmp_path / "loop_integration_stream.jsonl")
             proxy = Proxy(recorder)
 
             async def run():

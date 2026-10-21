@@ -157,7 +157,7 @@ def test_guard_empty_apply_placeholder():
 _chunk = chunk
 
 
-def _run_forward(chunks, stream=False):
+def _run_forward(tmp_path, chunks, stream=False):
     with MockUpstream([{"chunks": chunks}]) as mock:
         with settings_override(
             llm_base_url=mock.url,
@@ -165,7 +165,7 @@ def _run_forward(chunks, stream=False):
             think_cleanup_enabled=True,
             think_empty_response_placeholder=_PLACEHOLDER,
         ):
-            recorder = Recorder("/tmp/think_cleanup_integration.jsonl")
+            recorder = Recorder(tmp_path / "think_cleanup_integration.jsonl")
             proxy = Proxy(recorder)
             req = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
             if stream:
@@ -190,14 +190,14 @@ def _run_forward(chunks, stream=False):
             return asyncio.run(run())
 
 
-def test_reconstructed_think_only_returns_placeholder():
+def test_reconstructed_think_only_returns_placeholder(tmp_path):
     chunks = [
         _chunk({"role": "assistant", "content": "<think>"}),
         _chunk({"content": "step one"}),
         _chunk({"content": "</think>"}),
         _chunk({}, finish_reason="stop"),
     ]
-    resp = _run_forward(chunks, stream=False)
+    resp = _run_forward(tmp_path, chunks, stream=False)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     message = data["choices"][0]["message"]
@@ -205,14 +205,14 @@ def test_reconstructed_think_only_returns_placeholder():
     assert message["reasoning_content"] == "step one", message
 
 
-def test_streaming_think_only_returns_placeholder_sse():
+def test_streaming_think_only_returns_placeholder_sse(tmp_path):
     chunks = [
         _chunk({"role": "assistant", "content": "<think>"}),
         _chunk({"content": "step one"}),
         _chunk({"content": "</think>"}),
         _chunk({}, finish_reason="stop"),
     ]
-    resp = _run_forward(chunks, stream=True)
+    resp = _run_forward(tmp_path, chunks, stream=True)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     assert resp.media_type == "text/event-stream", resp.media_type
     text = resp.body.decode("utf-8")
@@ -224,21 +224,21 @@ def test_streaming_think_only_returns_placeholder_sse():
     assert "data: [DONE]" in text, text
 
 
-def test_streaming_no_change_passthrough():
+def test_streaming_no_change_passthrough(tmp_path):
     """Regression: a clean stream is still passed through verbatim (raw SSE)."""
     chunks = [
         _chunk({"role": "assistant", "content": ""}),
         _chunk({"content": "plain answer"}),
         _chunk({}, finish_reason="stop"),
     ]
-    resp = _run_forward(chunks, stream=True)
+    resp = _run_forward(tmp_path, chunks, stream=True)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     text = resp.body.decode("utf-8")
     assert "plain answer" in text, text
     assert "chat.completion.chunk" in text, text
 
 
-def test_reconstructed_tool_call_turn_no_placeholder():
+def test_reconstructed_tool_call_turn_no_placeholder(tmp_path):
     """A tool-call turn must keep empty content — no placeholder injected."""
     chunks = [
         _chunk({"role": "assistant", "reasoning_content": "which tool?"}),
@@ -258,7 +258,7 @@ def test_reconstructed_tool_call_turn_no_placeholder():
         _chunk({"tool_calls": [{"index": 0, "function": {"arguments": '"Paris"}'}}]}),
         _chunk({}, finish_reason="tool_calls"),
     ]
-    resp = _run_forward(chunks, stream=False)
+    resp = _run_forward(tmp_path, chunks, stream=False)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     message = data["choices"][0]["message"]

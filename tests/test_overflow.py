@@ -191,7 +191,7 @@ def _overflow_mock(loop_enabled):
     return MockUpstream(specs)
 
 
-def _run_forward(loop_enabled, content, enabled=True):
+def _run_forward(tmp_path, loop_enabled, content, enabled=True):
     with _overflow_mock(loop_enabled) as mock:
         with settings_override(
             llm_base_url=mock.url,
@@ -207,7 +207,7 @@ def _run_forward(loop_enabled, content, enabled=True):
             message_overflow_truncate=True,
             message_overflow_warning=_WARNING,
         ):
-            recorder = Recorder("/tmp/overflow_integration.jsonl")
+            recorder = Recorder(tmp_path / "overflow_integration.jsonl")
             proxy = Proxy(recorder)
             body = json.dumps(
                 {
@@ -229,14 +229,16 @@ def _run_forward(loop_enabled, content, enabled=True):
 
             resp = asyncio.run(run())
             records = [
-                json.loads(line) for line in open("/tmp/overflow_integration.jsonl") if line.strip()
+                json.loads(line)
+                for line in open(tmp_path / "overflow_integration.jsonl")
+                if line.strip()
             ]
             captured = mock.json_bodies()[0]
             return resp, records, captured
 
 
-def test_buffered_forward_truncates_before_upstream():
-    resp, records, captured = _run_forward(False, "first line\n" + "x" * 1000)
+def test_buffered_forward_truncates_before_upstream(tmp_path):
+    resp, records, captured = _run_forward(tmp_path, False, "first line\n" + "x" * 1000)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     assert "stream" not in captured
     tool_content = captured["messages"][1]["content"]
@@ -246,16 +248,18 @@ def test_buffered_forward_truncates_before_upstream():
     assert final["message_overflow"][0]["size"] == len("first line\n" + "x" * 1000)
 
 
-def test_streaming_forward_truncates_before_upstream():
-    resp, records, captured = _run_forward(True, "first line\n" + "x" * 1000)
+def test_streaming_forward_truncates_before_upstream(tmp_path):
+    resp, records, captured = _run_forward(tmp_path, True, "first line\n" + "x" * 1000)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     tool_content = captured["messages"][1]["content"]
     assert tool_content == f"{_WARNING}\nfirst line", tool_content
     assert records[-1]["message_overflow"][0]["index"] == 1, records[-1]
 
 
-def test_disabled_is_noop():
-    resp, records, captured = _run_forward(False, "first line\n" + "x" * 1000, enabled=False)
+def test_disabled_is_noop(tmp_path):
+    resp, records, captured = _run_forward(
+        tmp_path, False, "first line\n" + "x" * 1000, enabled=False
+    )
     assert resp.status_code == 200, (resp.status_code, resp.body)
     # The upstream received the full, unmodified tool result.
     assert captured["messages"][1]["content"] == "first line\n" + "x" * 1000

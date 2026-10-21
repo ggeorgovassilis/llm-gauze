@@ -29,7 +29,7 @@ def _body(payload=None):
     ).encode()
 
 
-def _run_forward(specs, *, body=None, **overrides):
+def _run_forward(tmp_path, specs, *, body=None, **overrides):
     """Drive ``Proxy.forward`` with loop detection off and only ``overrides`` on."""
     base = {
         "loop_detection_enabled": False,
@@ -45,7 +45,7 @@ def _run_forward(specs, *, body=None, **overrides):
         base["llm_base_url"] = mock.url
         base.update(overrides)
         with settings_override(**base):
-            recorder = Recorder("/tmp/streaming_independence.jsonl")
+            recorder = Recorder(tmp_path / "streaming_independence.jsonl")
             proxy = Proxy(recorder)
 
             async def run():
@@ -82,9 +82,10 @@ def test_streaming_feature_enabled_matches_each_switch():
 # --- each feature fires with loop detection off ----------------------
 
 
-def test_stall_detection_fires_without_loop_detection():
+def test_stall_detection_fires_without_loop_detection(tmp_path):
     steps = [(0.03, b": ping\n\n") for _ in range(30)]
     resp, _ = _run_forward(
+        tmp_path,
         [{"steps": steps}],
         stall_detection_enabled=True,
         stall_ttft_seconds=0.2,
@@ -94,12 +95,13 @@ def test_stall_detection_fires_without_loop_detection():
     assert json.loads(resp.body)["error"]["type"] == "stalled_detected"
 
 
-def test_runaway_reasoning_fires_without_loop_detection():
+def test_runaway_reasoning_fires_without_loop_detection(tmp_path):
     chunks = [
         _chunk({"reasoning_content": "thinking " * 20}),
         _chunk({}, finish_reason="stop"),
     ]
     resp, _ = _run_forward(
+        tmp_path,
         [{"chunks": chunks}],
         runaway_reasoning_enabled=True,
         runaway_reasoning_token_threshold=10,
@@ -112,7 +114,7 @@ def test_runaway_reasoning_fires_without_loop_detection():
     assert json.loads(resp.body)["error"]["type"] == "runaway_reasoning_detected"
 
 
-def test_extract_fires_without_loop_detection():
+def test_extract_fires_without_loop_detection(tmp_path):
     empty_turn = [
         _chunk({"role": "assistant", "reasoning_content": "thinking hard"}),
         _chunk({}, finish_reason="stop"),
@@ -122,6 +124,7 @@ def test_extract_fires_without_loop_detection():
         _chunk({}, finish_reason="stop"),
     ]
     resp, count = _run_forward(
+        tmp_path,
         [{"chunks": empty_turn}, {"chunks": answer_turn}],
         extract_enabled=True,
         extract_max_attempts=2,
@@ -133,7 +136,7 @@ def test_extract_fires_without_loop_detection():
     assert count == 2, count
 
 
-def test_coast_fires_without_loop_detection():
+def test_coast_fires_without_loop_detection(tmp_path):
     loop_request = {
         "model": "test",
         "messages": [
@@ -180,6 +183,7 @@ def test_coast_fires_without_loop_detection():
         _chunk({}, finish_reason="tool_calls"),
     ]
     resp, count = _run_forward(
+        tmp_path,
         [{"chunks": coast_turn}, {"chunks": tool_call_turn}],
         body=_body(loop_request),
         coast_detection_enabled=True,
@@ -193,12 +197,13 @@ def test_coast_fires_without_loop_detection():
     assert count == 2, count
 
 
-def test_think_cleanup_fires_without_loop_detection():
+def test_think_cleanup_fires_without_loop_detection(tmp_path):
     leaky_turn = [
         _chunk({"role": "assistant", "content": "<think>scratch</think> the real answer"}),
         _chunk({}, finish_reason="stop"),
     ]
     resp, _ = _run_forward(
+        tmp_path,
         [{"chunks": leaky_turn}],
         think_cleanup_enabled=True,
     )
@@ -209,7 +214,7 @@ def test_think_cleanup_fires_without_loop_detection():
     assert message["reasoning_content"] == "scratch", message
 
 
-def test_tool_call_guard_fires_without_loop_detection():
+def test_tool_call_guard_fires_without_loop_detection(tmp_path):
     truncated_call = [
         _chunk(
             {
@@ -227,6 +232,7 @@ def test_tool_call_guard_fires_without_loop_detection():
         _chunk({}, finish_reason="tool_calls"),
     ]
     resp, _ = _run_forward(
+        tmp_path,
         [{"chunks": truncated_call}],
         tool_call_guard_enabled=True,
     )
@@ -235,7 +241,7 @@ def test_tool_call_guard_fires_without_loop_detection():
     assert json.loads(call["function"]["arguments"]) == {"city": "London"}, call
 
 
-def test_loop_detection_still_fires_when_enabled():
+def test_loop_detection_still_fires_when_enabled(tmp_path):
     # Sanity: with loop detection itself on (and everything else off) a
     # repetitive stream is still caught — the gate change did not break it.
     sentence = "Let me carefully reconsider the whole approach before continuing."
@@ -245,6 +251,7 @@ def test_loop_detection_still_fires_when_enabled():
         _chunk({}, finish_reason="stop"),
     ]
     resp, _ = _run_forward(
+        tmp_path,
         [{"chunks": chunks}],
         loop_detection_enabled=True,
         loop_retry_enabled=False,

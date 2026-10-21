@@ -166,14 +166,14 @@ def test_drop_trailing_comma_skips_whitespace():
 _chunk = chunk
 
 
-def _run_forward(chunks):
+def _run_forward(tmp_path, chunks):
     with MockUpstream([{"chunks": chunks}]) as mock:
         with settings_override(
             llm_base_url=mock.url,
             loop_detection_enabled=True,
             tool_call_guard_enabled=True,
         ):
-            recorder = Recorder("/tmp/tool_call_integration.jsonl")
+            recorder = Recorder(tmp_path / "tool_call_integration.jsonl")
             proxy = Proxy(recorder)
             req = {
                 "model": "test",
@@ -197,7 +197,7 @@ def _run_forward(chunks):
                 )
                 records = [
                     json.loads(line)
-                    for line in open("/tmp/tool_call_integration.jsonl")
+                    for line in open(tmp_path / "tool_call_integration.jsonl")
                     if line.strip()
                 ]
                 return resp, records
@@ -205,7 +205,7 @@ def _run_forward(chunks):
             return asyncio.run(run())
 
 
-def test_truncated_tool_call_is_repaired_end_to_end():
+def test_truncated_tool_call_is_repaired_end_to_end(tmp_path):
     # A tool call whose arguments were cut off mid-string across two chunks.
     chunks = [
         _chunk(
@@ -226,7 +226,7 @@ def test_truncated_tool_call_is_repaired_end_to_end():
         ),
         _chunk({}, finish_reason="tool_calls"),
     ]
-    resp, records = _run_forward(chunks)
+    resp, records = _run_forward(tmp_path, chunks)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     message = data["choices"][0]["message"]
@@ -238,7 +238,7 @@ def test_truncated_tool_call_is_repaired_end_to_end():
     assert final["tool_repair"] == [{"kind": "repaired_arguments", "index": 0}], final
 
 
-def test_unfixable_tool_call_is_flagged_not_crashed():
+def test_unfixable_tool_call_is_flagged_not_crashed(tmp_path):
     chunks = [
         _chunk(
             {
@@ -258,7 +258,7 @@ def test_unfixable_tool_call_is_flagged_not_crashed():
         ),
         _chunk({}, finish_reason="tool_calls"),
     ]
-    resp, records = _run_forward(chunks)
+    resp, records = _run_forward(tmp_path, chunks)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     call = data["choices"][0]["message"]["tool_calls"][0]
@@ -270,7 +270,7 @@ def test_unfixable_tool_call_is_flagged_not_crashed():
     ], final
 
 
-def test_valid_tool_call_recorded_without_repair():
+def test_valid_tool_call_recorded_without_repair(tmp_path):
     chunks = [
         _chunk(
             {
@@ -290,6 +290,6 @@ def test_valid_tool_call_recorded_without_repair():
         ),
         _chunk({}, finish_reason="tool_calls"),
     ]
-    resp, records = _run_forward(chunks)
+    resp, records = _run_forward(tmp_path, chunks)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     assert records[-1].get("tool_repair") is None, records[-1]

@@ -19,7 +19,7 @@ _chunk = chunk
 _sse = sse
 
 
-def _run_forward(steps):
+def _run_forward(tmp_path, steps):
     with MockUpstream([{"steps": steps}]) as mock:
         with settings_override(
             llm_base_url=mock.url,
@@ -27,7 +27,7 @@ def _run_forward(steps):
             stall_ttft_seconds=0.2,
             stall_gap_seconds=0.3,
         ):
-            recorder = Recorder("/tmp/stall_integration.jsonl")
+            recorder = Recorder(tmp_path / "stall_integration.jsonl")
             proxy = Proxy(recorder)
             body = json.dumps(
                 {
@@ -54,11 +54,11 @@ def _run_forward(steps):
             return asyncio.run(run())
 
 
-def test_stall_aborts_silent_stream():
+def test_stall_aborts_silent_stream(tmp_path):
     """Headers + keepalives only (no content token) -> stall abort, no hang."""
     # ~0.9s of keepalive/comment frames, far beyond the 0.2s TTFT budget.
     steps = [(0.03, b": ping\n\n") for _ in range(30)]
-    resp = _run_forward(steps)
+    resp = _run_forward(tmp_path, steps)
     data = json.loads(resp.body)
     assert resp.status_code == settings.stall_abort_status, (
         resp.status_code,
@@ -68,7 +68,7 @@ def test_stall_aborts_silent_stream():
     assert "token" in data["error"]["reason"], data
 
 
-def test_stall_does_not_abort_flowing_stream():
+def test_stall_does_not_abort_flowing_stream(tmp_path):
     """Tokens arriving within the gap budget must not trip the watchdog."""
     steps = [
         (0.0, b": ping\n\n"),  # keepalive must NOT reset the timer
@@ -77,14 +77,14 @@ def test_stall_does_not_abort_flowing_stream():
         (0.05, _sse(_chunk({"content": "world"}))),
         (0.05, _sse(_chunk({}, finish_reason="stop"))),
     ]
-    resp = _run_forward(steps)
+    resp = _run_forward(tmp_path, steps)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     assert data["object"] == "chat.completion", data
     assert data["choices"][0]["message"]["content"] == "Hello world", data
 
 
-def test_tool_call_deltas_reset_stall_timer():
+def test_tool_call_deltas_reset_stall_timer(tmp_path):
     """Tool-call fragments are content-bearing: a slow argument stream must
     not be misread as a stall even when no reasoning/content token appears."""
     # Each tool-call fragment arrives within the 0.3s gap budget, but there is
@@ -113,26 +113,28 @@ def test_tool_call_deltas_reset_stall_timer():
         ),
         (0.05, _sse(_chunk({}, finish_reason="tool_calls"))),
     ]
-    resp = _run_forward(steps)
+    resp = _run_forward(tmp_path, steps)
     assert resp.status_code == 200, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     call = data["choices"][0]["message"]["tool_calls"][0]
     assert call["function"]["name"] == "get_weather", call
 
 
-def test_stall_abort_records_partial_output():
+def test_stall_abort_records_partial_output(tmp_path):
     """The abort record preserves partial reasoning/content/tool-calls."""
     steps = [
         (0.0, _sse(_chunk({"reasoning_content": "about to call a tool"}))),
         # Then nothing for far beyond the gap budget -> stall.
         (0.5, _sse(_chunk({}, finish_reason="stop"))),
     ]
-    resp = _run_forward(steps)
+    resp = _run_forward(tmp_path, steps)
     assert resp.status_code == settings.stall_abort_status, (
         resp.status_code,
         resp.body,
     )
-    records = [json.loads(line) for line in open("/tmp/stall_integration.jsonl") if line.strip()]
+    records = [
+        json.loads(line) for line in open(tmp_path / "stall_integration.jsonl") if line.strip()
+    ]
     abort = [r for r in records if r.get("abort_kind") == VerdictKind.STALLED.value][-1]
     assert abort["partial_reasoning"] == "about to call a tool", abort
     assert abort["partial_content"] is None, abort

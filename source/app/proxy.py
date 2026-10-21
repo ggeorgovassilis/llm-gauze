@@ -1310,7 +1310,7 @@ class Proxy:
         cleanup_changes = list(result.relocate_changes)
 
         if extract_outcome == "exhausted":
-            # The final turn is still asking for internal ``gauze_read`` pages;
+            # The final turn is still asking for internal read-tool pages;
             # those tool calls must never reach the client. Drop them and apply
             # the placeholder floor directly — the reasoning lives in the
             # rung's captured resource, not this turn, so the guard's

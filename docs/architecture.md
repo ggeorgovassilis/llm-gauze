@@ -98,7 +98,8 @@ ladder), not "edit the loop". `Transform` classes (`ThinkContentGuard`,
   `context.py`'s response-side `ContextWindowDetector`).
 - `app/remediation/extract.py` — `ExtractionPolicy`, recover a visible answer
   from a turn that finished empty (reasoning only, no content, no tool calls)
-  by paging through the reasoning via the `gauze_read` tool.
+  by paging through the reasoning via the configured read tool
+  (`EXTRACT_TOOL_NAME`, default `gauze_read`).
 - `app/remediation/empty_stop.py` — `EmptyStopPolicy`, re-prompt a turn that
   stopped with empty content, no tool calls, and no reasoning content while
   still consuming reasoning tokens (`reasoning_tokens > 0`, `text_tokens == 0`).

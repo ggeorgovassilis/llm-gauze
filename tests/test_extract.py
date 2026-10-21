@@ -1,9 +1,9 @@
 """Extraction (recover answer from think-only turns) — unit + integration.
 
 Unit tests cover ``ExtractionPolicy`` seed/read-exec dispatch, budget, and
-exact ``gauze_read`` tool-name matching. Integration tests drive the real
+exact read-tool name matching. Integration tests drive the real
 ``Proxy._forward_streaming`` against a mock SSE upstream: a think-only turn
-seeds the reasoning resource, a ``gauze_read`` tool call pages through it, and
+seeds the reasoning resource, a read-tool call pages through it, and
 a final turn yields the visible answer — plus a budget-exhaustion case and a
 foreign-tool-call pass-through case.
 """
@@ -310,7 +310,7 @@ def test_think_only_turn_is_extracted_and_returns_real_answer():
     final = records[-1]
     assert final["extract"] == {"attempts": 2, "outcome": "succeeded"}, final
 
-    # Seed re-submission carried the instruction + the gauze_read tool.
+    # Seed re-submission carried the instruction + the configured read tool.
     assert bodies[1]["messages"][-1] == {"role": "user", "content": _INSTRUCTION}
     assert bodies[1]["tools"][-1]["function"]["name"] == _TOOL_NAME
     # Read-exec re-submission replayed the tool result as the bounded slice.
@@ -333,7 +333,7 @@ def test_think_only_turn_is_extracted_and_returns_real_answer():
 
 
 def test_extract_budget_exhausted_falls_back_to_placeholder():
-    # Keep looping on gauze_read: seed + one read consumes the budget of 2,
+    # Keep looping on read calls: seed + one read consumes the budget of 2,
     # and the final read finds the rung spent — the placeholder floor applies.
     resp, records, count, _ = _run_forward([_THINK_TURN, _read_turn(), _read_turn()], extract_max=2)
     assert resp.status_code == 200, (resp.status_code, resp.body)

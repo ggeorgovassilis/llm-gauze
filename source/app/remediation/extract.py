@@ -36,13 +36,9 @@ import json
 from app.config import settings
 from app.remediation.base import Remediation, Turn
 
-#: The namespaced read tool; matched by exact name. A turn carrying the
-#: *client's* tool calls is never intercepted.
-TOOL_NAME = "gauze_read"
-
 #: Canonical resource name under which the captured reasoning is stored. There
 #: is only ever one resource per request, so this is a fixed key the model
-#: references in its ``gauze_read`` calls.
+#: references in its read calls.
 RESOURCE_NAME = "reasoning"
 
 
@@ -65,9 +61,19 @@ class ExtractionPolicy(Remediation):
 
     name = "extract"
 
-    def __init__(self, instruction: str, max_attempts: int) -> None:
+    def __init__(
+        self,
+        instruction: str,
+        max_attempts: int,
+        tool_name: str | None = None,
+        max_window_lines: int | None = None,
+    ) -> None:
         self.instruction = instruction
         self.max_attempts = max_attempts
+        self.tool_name = tool_name if tool_name is not None else settings.extract_tool_name
+        self.max_window_lines = (
+            max_window_lines if max_window_lines is not None else settings.extract_max_window_lines
+        )
         # Per-request state (safe: the ladder is fresh per request).
         self._resource: str | None = None
         self._last_mode: str | None = None
@@ -75,7 +81,12 @@ class ExtractionPolicy(Remediation):
 
     @classmethod
     def from_settings(cls) -> "ExtractionPolicy":
-        return cls(settings.extract_instruction_text, settings.extract_max_attempts)
+        return cls(
+            settings.extract_instruction_text,
+            settings.extract_max_attempts,
+            tool_name=settings.extract_tool_name,
+            max_window_lines=settings.extract_max_window_lines,
+        )
 
     # --- triggers -----------------------------------------------------
 
@@ -100,18 +111,16 @@ class ExtractionPolicy(Remediation):
             and (turn.reasoning or "").strip() != ""
         )
 
-    @staticmethod
-    def _is_read_exec(turn: Turn) -> bool:
+    def _is_read_exec(self, turn: Turn) -> bool:
         """True when the turn's tool calls are all ``gauze_read`` (and non-empty)."""
         calls = turn.tool_calls
-        return bool(calls) and all(ExtractionPolicy._is_gauze_read(c) for c in calls)
+        return bool(calls) and all(self._is_gauze_read(c) for c in calls)
 
-    @staticmethod
-    def _is_gauze_read(call) -> bool:
+    def _is_gauze_read(self, call) -> bool:
         return (
             isinstance(call, dict)
             and isinstance(call.get("function"), dict)
-            and call["function"].get("name") == TOOL_NAME
+            and call["function"].get("name") == self.tool_name
         )
 
     # --- action -------------------------------------------------------
@@ -198,6 +207,7 @@ class ExtractionPolicy(Remediation):
             line_count = _to_int(args.get("line_count"), 1)
             if line_count < 1:
                 line_count = 1
+        line_count = min(line_count, self.max_window_lines)
         start = line_from - 1
         return "\n".join(lines[start : start + line_count])
 
@@ -206,7 +216,7 @@ class ExtractionPolicy(Remediation):
         return {
             "type": "function",
             "function": {
-                "name": TOOL_NAME,
+                "name": self.tool_name,
                 "description": (
                     "Read a bounded window of your captured chain-of-thought "
                     "reasoning by line. Use this to page through your previous "

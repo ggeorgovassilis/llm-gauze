@@ -164,6 +164,20 @@ sequenceDiagram
 See [`docs/architecture.md`](docs/architecture.md) for the full design and
 [`docs/configuration.md`](docs/configuration.md) for every setting.
 
+## Analysing recordings
+
+Recorded exchanges can be read back with the composable analysis toolkit
+(rotated files plus the live one, in order):
+
+```bash
+./scripts/analyse-records 'read | digest stuck'
+./scripts/analyse-records 'read | filter kind=error | digest endpoint'
+```
+
+The four digests (`stuck`, `endpoint`, `remediation`, `narrative`) emit compact
+JSON summaries; see [`docs/analysis.md`](docs/analysis.md) for the pipeline
+grammar, filters and output fields.
+
 ## Developing
 
 See [`DEVELOPING.md`](DEVELOPING.md) for local development, running the tests,

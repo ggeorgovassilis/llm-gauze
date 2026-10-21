@@ -34,6 +34,10 @@ client ──▶ gateway (FastAPI) ──▶ recorder (JSONL)
 - `app/recorder.py` — append-only JSONL recording of exchanges/attempts. The
   stabilised record field contract is documented in
   [`record-schema.md`](record-schema.md).
+- `app/analysis/` — composable `read | filter | project | digest` stages over
+  the recorded JSONL, with four ready-made digests (`stuck`, `endpoint`,
+  `remediation`, `narrative`), exposed by `scripts/analyse-records`; see
+  [`analysis.md`](analysis.md).
 - `app/remediation/` — the pluggable remediation pipeline (below).
 
 ## Separation of concerns
@@ -134,6 +138,20 @@ deliberately left unretryable so they surface instead of being masked.
 
 Future capabilities (sloppy-response cleanup, ...) implement these interfaces
 rather than editing the proxy.
+
+## Analysis toolkit
+
+The recorder's JSONL store is only useful if it can be read back quickly.
+`app/analysis/` therefore provides small, composable stages over the record
+stream — `read` (rotated files + live file, chronological, tolerant of a torn
+tail), `filter` (outcome/status/error/reason/abort_kind/path/time/rung/tool
+calls), `project` (reduce to the fields a question needs), and `digest` — plus
+four ready-made digests: `stuck`, `endpoint`, `remediation` and `narrative`.
+Stages compose in Python (`Read(...) | Filter(...) | Digest(...)`) and in the
+CLI (`scripts/analyse-records 'read | filter … | digest …'`), and emit JSON /
+JSONL rather than prose. Records are classified centrally
+(`attempt`/`abort`/`pass`/`final`) so the overloaded `outcome` discriminator is
+never read alone. See [`analysis.md`](analysis.md).
 
 ## Loop detection
 

@@ -301,10 +301,11 @@ def _run_forward(chunks_by_request, extract_max=3, stream=False, body=None):
             return resp, records, mock.request_count, mock.json_bodies()
 
 
-def _run_watchdog_abort(specs, tmp_path):
-    """Drive ``_forward_streaming`` over `specs` with extraction and loop
-    detection enabled, returning the response and the ``extract_aborts_total``
-    counter value before and after the run."""
+def _run_watchdog_abort(specs, tmp_path, extract_enabled=True):
+    """Drive ``_forward_streaming`` over `specs` with loop detection enabled,
+    returning the response and the ``extract_aborts_total`` counter value
+    before and after the run. Extraction is enabled by default so the
+    extraction rung is present in the ladder."""
     before = telemetry.snapshot()["counters"].get("extract_aborts_total", 0)
     with MockUpstream(specs) as mock:
         with settings_override(
@@ -314,7 +315,7 @@ def _run_watchdog_abort(specs, tmp_path):
             runaway_reasoning_enabled=False,
             think_cleanup_enabled=True,
             think_empty_response_placeholder=_PLACEHOLDER,
-            extract_enabled=True,
+            extract_enabled=extract_enabled,
             extract_instruction_text=_INSTRUCTION,
             extract_max_attempts=3,
             coast_detection_enabled=False,
@@ -483,6 +484,26 @@ def test_extract_read_exec_watchdog_abort_increments_telemetry(tmp_path):
         tmp_path,
     )
     assert after == before + 1, (before, after)
+
+    assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
+    data = json.loads(resp.body)
+    assert data["error"]["type"] == "loop_detected", data
+
+
+def test_watchdog_abort_without_extraction_leaves_counter_unchanged(tmp_path):
+    # A visible-content loop with extraction disabled: the loop watchdog still
+    # aborts, but no extraction rung is active, so `extract_aborts_total` must
+    # stay untouched. Guards the isinstance/last_mode gate in _forward_streaming.
+    sentence = "This line keeps repeating without any reasoning to extract."
+    loop_turn = [
+        _chunk({"role": "assistant", "content": ""}),
+        *[_chunk({"content": sentence + ". "}) for _ in range(40)],
+        _chunk({}, finish_reason="stop"),
+    ]
+    resp, before, after = _run_watchdog_abort(
+        [{"chunks": loop_turn}], tmp_path, extract_enabled=False
+    )
+    assert after == before, (before, after)
 
     assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
     data = json.loads(resp.body)

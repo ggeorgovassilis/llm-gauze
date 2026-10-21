@@ -89,8 +89,9 @@ def _answer_turn():
     ]
 
 
-def _run_full_cycle():
+def _run_full_cycle(tmp_path):
     """Drive the full cycle against a distinct-spec ``MockUpstream``."""
+    record_path = tmp_path / "extract_cycle_integration.jsonl"
     specs = [
         {"chunks": _think_turn()},  # p1: think-only -> seed
         {"chunks": _read_turn("call_read_1", 1, 1)},  # p3 read 1 (after seed)
@@ -111,7 +112,7 @@ def _run_full_cycle():
             tool_call_guard_enabled=False,
             loop_retry_enabled=False,
         ):
-            recorder = Recorder("/tmp/extract_cycle_integration.jsonl")
+            recorder = Recorder(record_path)
             proxy = Proxy(recorder)
             body = json.dumps(
                 {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
@@ -131,19 +132,15 @@ def _run_full_cycle():
                         "path": "/v1/chat/completions",
                     },
                 )
-                records = [
-                    json.loads(line)
-                    for line in open("/tmp/extract_cycle_integration.jsonl")
-                    if line.strip()
-                ]
+                records = [json.loads(line) for line in open(record_path) if line.strip()]
                 return resp, records
 
             resp, records = asyncio.run(run())
             return resp, records, mock.request_count, mock.json_bodies()
 
 
-def test_full_extraction_cycle_pages_reasoning_to_decision():
-    resp, records, count, bodies = _run_full_cycle()
+def test_full_extraction_cycle_pages_reasoning_to_decision(tmp_path):
+    resp, records, count, bodies = _run_full_cycle(tmp_path)
 
     # p5: a 200 chat.completion whose visible content is the decision the
     # model produced on the final turn.

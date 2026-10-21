@@ -213,7 +213,7 @@ def _run_forward(chunks_by_request, extract_max=3, stream=False, body=None):
             think_cleanup_enabled=True,
             think_empty_response_placeholder=_PLACEHOLDER,
             extract_enabled=True,
-            extract_instruction=_INSTRUCTION,
+            extract_instruction_text=_INSTRUCTION,
             extract_max_attempts=extract_max,
             coast_detection_enabled=False,
             tool_call_guard_enabled=False,

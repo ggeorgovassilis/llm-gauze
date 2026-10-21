@@ -223,7 +223,7 @@ def test_extract_and_coast_compose_on_one_request():
             loop_detection_enabled=True,
             think_cleanup_enabled=True,
             extract_enabled=True,
-            extract_instruction=_INSTRUCTION,
+            extract_instruction_text=_INSTRUCTION,
             extract_max_attempts=2,
             coast_detection_enabled=True,
             coast_nudge_text=_COAST_TEXT,

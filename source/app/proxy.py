@@ -12,6 +12,7 @@ import logging
 import time
 import traceback
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import httpx
@@ -731,6 +732,7 @@ class Proxy:
         headers: dict,
         base_entry: dict,
         started: float | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> Response:
         """Stream the upstream response; drive the remediation ladder.
 
@@ -756,8 +758,9 @@ class Proxy:
         # re-serialised), so any inbound Content-Length is stale. Drop it and
         # let httpx recompute it from the actual body; forwarding the stale
         # value makes h11 raise "Too much data for declared Content-Length".
+        clock = clock or time.time
         if started is None:
-            started = time.time()
+            started = clock()
         out_headers = {k: v for k, v in headers.items() if k.lower() != "content-length"}
         content_type = _ensure_stream(body)[1]
         if content_type:
@@ -802,7 +805,7 @@ class Proxy:
             remediation_exhausted = None
             if step is not None:
                 remediation_exhausted = _remediation_exhausted(
-                    rounds, settings.max_remediation_rounds, deadline
+                    rounds, settings.max_remediation_rounds, deadline, clock()
                 )
                 if remediation_exhausted is None:
                     logger.warning(
@@ -841,7 +844,7 @@ class Proxy:
                     url,
                     resp.status_code,
                     result.outcome or "unknown",
-                    time.time() - started,
+                    clock() - started,
                 )
                 logger.debug(
                     "response status=%s headers=%r body=%r",
@@ -872,10 +875,10 @@ class Proxy:
                 attempts.get("empty_stop", 0),
                 empty_stop_outcome,
                 rounds,
-                time.time() - started,
+                clock() - started,
                 remediation_exhausted,
             )
-            self._log_completion(method, url, resp.status_code, "success", time.time() - started)
+            self._log_completion(method, url, resp.status_code, "success", clock() - started)
             logger.debug(
                 "response status=%s headers=%r body=%r",
                 resp.status_code,

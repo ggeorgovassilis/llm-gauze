@@ -43,6 +43,19 @@ def _request():
     }
 
 
+class _FakeClock:
+    """A wall-clock stand-in the tests advance by hand."""
+
+    def __init__(self, start: float) -> None:
+        self._now = start
+
+    def __call__(self) -> float:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += seconds
+
+
 # --- unit tests: the cap decision ------------------------------------
 
 
@@ -71,6 +84,8 @@ def _run_forward(
     *,
     max_rounds=16,
     max_seconds=300.0,
+    started=None,
+    clock=None,
 ):
     specs = [{"chunks": turn} for turn in chunks_by_request]
     with MockUpstream(specs) as mock:
@@ -107,8 +122,11 @@ def _run_forward(
                         "method": "POST",
                         "path": "/v1/chat/completions",
                     },
+                    started=started,
+                    clock=clock,
                 )
-                records = [json.loads(line) for line in open(record_path) if line.strip()]
+                with open(record_path) as f:
+                    records = [json.loads(line) for line in f if line.strip()]
                 return resp, records
 
             resp, records = asyncio.run(run())
@@ -145,12 +163,16 @@ def test_rounds_cap_stops_repeated_rung_before_per_rung_budget(tmp_path):
 
 def test_time_cap_stops_repeated_rung_via_short_budget(tmp_path):
     record_path = tmp_path / "remediation_time_cap.jsonl"
+    clock = _FakeClock(0.0)
+    clock.advance(1.0)  # trip the 1.0s budget before the first re-submission check
     before = telemetry.snapshot()["counters"].get("remediation_time_exhausted_total", 0)
     resp, records, count = _run_forward(
         [_SILENT_EMPTY_TURN, _SILENT_EMPTY_TURN],
         record_path,
         max_rounds=100,
-        max_seconds=1e-6,
+        max_seconds=1.0,
+        started=0.0,
+        clock=clock,
     )
     after = telemetry.snapshot()["counters"].get("remediation_time_exhausted_total", 0)
     assert after == before + 1, (before, after)
@@ -165,4 +187,4 @@ def test_time_cap_stops_repeated_rung_via_short_budget(tmp_path):
     final = records[-1]
     assert final["rounds"] == 0, final
     assert final["remediation_exhausted"] == "time", final
-    assert final["remediation_seconds"] >= 0, final
+    assert final["remediation_seconds"] == 1.0, final

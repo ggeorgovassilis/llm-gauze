@@ -307,7 +307,10 @@ at `EXTRACT_MAX_WINDOW_LINES`. The state machine has two modes:
   and read arguments, so the intervention is visible in `records.jsonl`.
 - On exhaustion the placeholder floor (`guard_empty`) is applied as before, so
   the client still receives a non-empty turn, and an `extract_aborts_total`
-  counter is incremented.
+  counter is incremented. The same counter is also incremented when a watchdog
+  verdict (loop/stall/runaway) aborts the exchange while the extraction rung is
+  active (`last_mode` is not `None`), covering a model that loops on the
+  `gauze_read` tool.
 
 The namespaced read tool is defined but never exposed to the upstream model's
 own tool routing: only the extraction rung references it.

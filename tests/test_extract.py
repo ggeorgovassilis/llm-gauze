@@ -11,10 +11,12 @@ foreign-tool-call pass-through case.
 import asyncio
 import json
 
+from app.config import settings
 from app.proxy import Proxy
 from app.recorder import Recorder
 from app.remediation.base import Turn
 from app.remediation.extract import RESOURCE_NAME, ExtractionPolicy
+from app.telemetry import telemetry
 from mock_upstream import MockUpstream, chunk, settings_override
 
 _INSTRUCTION = "PLEASE_PAGE_AND_ANSWER"
@@ -299,6 +301,55 @@ def _run_forward(chunks_by_request, extract_max=3, stream=False, body=None):
             return resp, records, mock.request_count, mock.json_bodies()
 
 
+def _run_watchdog_abort(specs, tmp_path, extract_enabled=True):
+    """Drive ``_forward_streaming`` over `specs` with loop detection enabled,
+    returning the response and the ``extract_aborts_total`` counter value
+    before and after the run. Extraction is enabled by default so the
+    extraction rung is present in the ladder."""
+    before = telemetry.snapshot()["counters"].get("extract_aborts_total", 0)
+    with MockUpstream(specs) as mock:
+        with settings_override(
+            llm_base_url=mock.url,
+            loop_detection_enabled=True,
+            stall_detection_enabled=False,
+            runaway_reasoning_enabled=False,
+            think_cleanup_enabled=True,
+            think_empty_response_placeholder=_PLACEHOLDER,
+            extract_enabled=extract_enabled,
+            extract_instruction_text=_INSTRUCTION,
+            extract_max_attempts=3,
+            coast_detection_enabled=False,
+            tool_call_guard_enabled=False,
+            loop_retry_enabled=False,
+            loop_window_bytes=2000,
+            loop_min_output_fraction=0.5,
+        ):
+            recorder = Recorder(str(tmp_path / "extract_abort_integration.jsonl"))
+            proxy = Proxy(recorder)
+            body = json.dumps(
+                {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
+            ).encode()
+
+            async def run():
+                return await proxy._forward_streaming(
+                    request_id="extract-abort-itest",
+                    method="POST",
+                    url="/v1/chat/completions",
+                    query="",
+                    body=body,
+                    headers={"content-type": "application/json"},
+                    base_entry={
+                        "request_id": "extract-abort-itest",
+                        "method": "POST",
+                        "path": "/v1/chat/completions",
+                    },
+                )
+
+            resp = asyncio.run(run())
+    after = telemetry.snapshot()["counters"].get("extract_aborts_total", 0)
+    return resp, before, after
+
+
 def test_think_only_turn_is_extracted_and_returns_real_answer():
     resp, records, count, bodies = _run_forward([_THINK_TURN, _read_turn(), _ANSWER_TURN])
     assert resp.status_code == 200, (resp.status_code, resp.body)
@@ -391,3 +442,88 @@ def test_large_reasoning_is_never_resubmitted_in_full():
     # The full stream must never appear in any single upstream request.
     for body in bodies:
         assert big not in json.dumps(body), body
+
+
+def test_extract_active_watchdog_abort_increments_telemetry(tmp_path):
+    # A seeded extraction rung (first turn) followed by a visible-content loop
+    # that the loop watchdog terminates. The abort must count against
+    # `extract_aborts_total` because the extraction rung is still active.
+    sentence = "Let me carefully reconsider the whole approach before continuing."
+    loop_turn = [
+        _chunk({"role": "assistant", "content": ""}),
+        *[_chunk({"content": sentence + ". "}) for _ in range(40)],
+        _chunk({}, finish_reason="stop"),
+    ]
+    resp, before, after = _run_watchdog_abort(
+        [{"chunks": _THINK_TURN}, {"chunks": loop_turn}], tmp_path
+    )
+    assert after == before + 1, (before, after)
+
+    assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
+    data = json.loads(resp.body)
+    assert data["error"]["type"] == "loop_detected", data
+
+
+def test_extract_read_exec_watchdog_abort_increments_telemetry(tmp_path):
+    # A seeded extraction rung, then a `gauze_read` read-exec turn (last_mode
+    # "read"), then a reasoning loop the loop watchdog terminates while the
+    # read-exec rung is still active. The abort must count against
+    # `extract_aborts_total` with the rung in the "read" state.
+    sentence = "I must page through the reasoning one more time before answering."
+    read_loop_turn = [
+        _chunk({"role": "assistant", "reasoning_content": ""}),
+        *[_chunk({"reasoning_content": sentence + ". "}) for _ in range(40)],
+        _chunk({}, finish_reason="stop"),
+    ]
+    resp, before, after = _run_watchdog_abort(
+        [
+            {"chunks": _THINK_TURN},
+            {"chunks": _read_turn()},
+            {"chunks": read_loop_turn},
+        ],
+        tmp_path,
+    )
+    assert after == before + 1, (before, after)
+
+    assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
+    data = json.loads(resp.body)
+    assert data["error"]["type"] == "loop_detected", data
+
+
+def test_watchdog_abort_without_extraction_leaves_counter_unchanged(tmp_path):
+    # A visible-content loop with extraction disabled: the loop watchdog still
+    # aborts, but no extraction rung is active, so `extract_aborts_total` must
+    # stay untouched. Guards the isinstance/last_mode gate in _forward_streaming.
+    sentence = "This line keeps repeating without any reasoning to extract."
+    loop_turn = [
+        _chunk({"role": "assistant", "content": ""}),
+        *[_chunk({"content": sentence + ". "}) for _ in range(40)],
+        _chunk({}, finish_reason="stop"),
+    ]
+    resp, before, after = _run_watchdog_abort(
+        [{"chunks": loop_turn}], tmp_path, extract_enabled=False
+    )
+    assert after == before, (before, after)
+
+    assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
+    data = json.loads(resp.body)
+    assert data["error"]["type"] == "loop_detected", data
+
+
+def test_watchdog_abort_with_unseeded_extraction_leaves_counter_unchanged(tmp_path):
+    # Extraction is enabled so the rung is present, but no think-only seed has
+    # run (last_mode is still None). A visible-content loop still aborts, and
+    # the unseeded rung must not count the abort against `extract_aborts_total`.
+    # Guards the `last_mode is not None` clause in _forward_streaming.
+    sentence = "This line repeats before any reasoning has been extracted."
+    loop_turn = [
+        _chunk({"role": "assistant", "content": ""}),
+        *[_chunk({"content": sentence + ". "}) for _ in range(40)],
+        _chunk({}, finish_reason="stop"),
+    ]
+    resp, before, after = _run_watchdog_abort([{"chunks": loop_turn}], tmp_path)
+    assert after == before, (before, after)
+
+    assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
+    data = json.loads(resp.body)
+    assert data["error"]["type"] == "loop_detected", data

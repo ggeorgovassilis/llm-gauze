@@ -91,6 +91,19 @@ def test_runaway_reasoning_aborts_exposition():
     assert "runaway_reasoning_aborts_total 2" in text
 
 
+def test_extract_aborts_exposition():
+    t = Telemetry()
+    t.incr("extract_aborts_total")
+    t.incr("extract_aborts_total")
+    text = t.render_prometheus()
+    assert (
+        "# HELP extract_aborts_total "
+        "Extraction runs aborted, by watchdog verdict or budget exhaustion."
+    ) in text
+    assert "# TYPE extract_aborts_total counter" in text
+    assert "extract_aborts_total 2" in text
+
+
 def test_json_snapshot_is_serialisable():
     t = Telemetry()
     t.incr("requests_total", {"outcome": "success"})

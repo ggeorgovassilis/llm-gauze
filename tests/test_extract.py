@@ -1,9 +1,9 @@
 """Extraction (recover answer from think-only turns) — unit + integration.
 
 Unit tests cover ``ExtractionPolicy`` seed/read-exec dispatch, budget, and
-exact ``gauze_read`` tool-name matching. Integration tests drive the real
+exact read-tool name matching. Integration tests drive the real
 ``Proxy._forward_streaming`` against a mock SSE upstream: a think-only turn
-seeds the reasoning resource, a ``gauze_read`` tool call pages through it, and
+seeds the reasoning resource, a read-tool call pages through it, and
 a final turn yields the visible answer — plus a budget-exhaustion case and a
 foreign-tool-call pass-through case.
 """
@@ -14,11 +14,12 @@ import json
 from app.proxy import Proxy
 from app.recorder import Recorder
 from app.remediation.base import Turn
-from app.remediation.extract import RESOURCE_NAME, TOOL_NAME, ExtractionPolicy
+from app.remediation.extract import RESOURCE_NAME, ExtractionPolicy
 from mock_upstream import MockUpstream, chunk, settings_override
 
 _INSTRUCTION = "PLEASE_PAGE_AND_ANSWER"
 _PLACEHOLDER = "THE_PLACEHOLDER"
+_TOOL_NAME = "gauze_read"
 
 _chunk = chunk
 
@@ -45,7 +46,7 @@ def _read_turn(line_from=2, line_count=1):
                         "id": "call_read_1",
                         "type": "function",
                         "function": {
-                            "name": TOOL_NAME,
+                            "name": _TOOL_NAME,
                             "arguments": json.dumps(
                                 {
                                     "resource": RESOURCE_NAME,
@@ -65,8 +66,13 @@ def _read_turn(line_from=2, line_count=1):
 # --- unit tests -------------------------------------------------------
 
 
-def _policy(max_attempts=3):
-    return ExtractionPolicy(instruction=_INSTRUCTION, max_attempts=max_attempts)
+def _policy(max_attempts=3, tool_name=None, max_window_lines=None):
+    return ExtractionPolicy(
+        instruction=_INSTRUCTION,
+        max_attempts=max_attempts,
+        tool_name=tool_name,
+        max_window_lines=max_window_lines,
+    )
 
 
 def test_think_only_turn_seeds():
@@ -111,7 +117,7 @@ def test_seed_captures_resource_and_appends_tool():
     assert p.last_mode == "seed"
     assert p.last_read_args is None
     assert out["messages"][-1] == {"role": "user", "content": _INSTRUCTION}
-    assert out["tools"][-1]["function"]["name"] == TOOL_NAME
+    assert out["tools"][-1]["function"]["name"] == _TOOL_NAME
 
 
 def test_seed_does_not_mutate_input():
@@ -125,7 +131,7 @@ def test_read_exec_fires_only_after_seed():
     p = _policy()
     turn = Turn(
         finish_reason="tool_calls",
-        tool_calls=[{"function": {"name": TOOL_NAME, "arguments": "{}"}}],
+        tool_calls=[{"function": {"name": _TOOL_NAME, "arguments": "{}"}}],
     )
     assert p.applies(turn, {}) is False
 
@@ -146,7 +152,7 @@ def test_mixed_tool_calls_are_not_intercepted():
     turn = Turn(
         finish_reason="tool_calls",
         tool_calls=[
-            {"id": "a", "function": {"name": TOOL_NAME, "arguments": "{}"}},
+            {"id": "a", "function": {"name": _TOOL_NAME, "arguments": "{}"}},
             {"id": "b", "function": {"name": "client_tool", "arguments": "{}"}},
         ],
     )
@@ -173,7 +179,7 @@ def test_read_exec_slices_resource_and_replays_tool_result():
                 "id": "call_read_1",
                 "type": "function",
                 "function": {
-                    "name": TOOL_NAME,
+                    "name": _TOOL_NAME,
                     "arguments": json.dumps(
                         {"resource": RESOURCE_NAME, "line_from": 2, "line_count": 1}
                     ),
@@ -196,6 +202,49 @@ def test_read_exec_slices_resource_and_replays_tool_result():
 def test_read_slice_defaults_line_count_to_remainder():
     p = _policy()
     p.apply(Turn(finish_reason="stop", reasoning="a\nb\nc"), {})
+    assert p._read_slice({"resource": RESOURCE_NAME, "line_from": 2}) == "b\nc"
+
+
+def test_configured_tool_name_matches_exactly():
+    p = _policy(tool_name="custom_read")
+    p.apply(Turn(finish_reason="stop", reasoning="x"), {})
+    matching = Turn(
+        finish_reason="tool_calls",
+        tool_calls=[{"id": "c", "function": {"name": "custom_read", "arguments": "{}"}}],
+    )
+    assert p.applies(matching, {}) is True
+    default_named = Turn(
+        finish_reason="tool_calls",
+        tool_calls=[{"id": "c", "function": {"name": _TOOL_NAME, "arguments": "{}"}}],
+    )
+    assert p.applies(default_named, {}) is False
+
+
+def test_configured_tool_name_is_appended_on_seed():
+    p = _policy(tool_name="custom_read")
+    body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
+    out = p.apply(Turn(finish_reason="stop", reasoning="x"), body)
+    assert out["tools"][-1]["function"]["name"] == "custom_read"
+
+
+def test_from_settings_propagates_configured_tool_name_and_window():
+    with settings_override(extract_tool_name="custom_read", extract_max_window_lines=7):
+        p = ExtractionPolicy.from_settings()
+        assert p.tool_name == "custom_read"
+        assert p.max_window_lines == 7
+
+
+def test_read_slice_clamps_line_count_to_max_window():
+    p = _policy(max_window_lines=3)
+    p.apply(Turn(finish_reason="stop", reasoning="a\nb\nc\nd\ne"), {})
+    assert (
+        p._read_slice({"resource": RESOURCE_NAME, "line_from": 2, "line_count": 100}) == "b\nc\nd"
+    )
+
+
+def test_read_slice_clamps_default_remainder_to_max_window():
+    p = _policy(max_window_lines=2)
+    p.apply(Turn(finish_reason="stop", reasoning="a\nb\nc\nd\ne"), {})
     assert p._read_slice({"resource": RESOURCE_NAME, "line_from": 2}) == "b\nc"
 
 
@@ -261,9 +310,9 @@ def test_think_only_turn_is_extracted_and_returns_real_answer():
     final = records[-1]
     assert final["extract"] == {"attempts": 2, "outcome": "succeeded"}, final
 
-    # Seed re-submission carried the instruction + the gauze_read tool.
+    # Seed re-submission carried the instruction + the configured read tool.
     assert bodies[1]["messages"][-1] == {"role": "user", "content": _INSTRUCTION}
-    assert bodies[1]["tools"][-1]["function"]["name"] == TOOL_NAME
+    assert bodies[1]["tools"][-1]["function"]["name"] == _TOOL_NAME
     # Read-exec re-submission replayed the tool result as the bounded slice.
     assert bodies[2]["messages"][-1] == {
         "role": "tool",
@@ -284,7 +333,7 @@ def test_think_only_turn_is_extracted_and_returns_real_answer():
 
 
 def test_extract_budget_exhausted_falls_back_to_placeholder():
-    # Keep looping on gauze_read: seed + one read consumes the budget of 2,
+    # Keep looping on read calls: seed + one read consumes the budget of 2,
     # and the final read finds the rung spent — the placeholder floor applies.
     resp, records, count, _ = _run_forward([_THINK_TURN, _read_turn(), _read_turn()], extract_max=2)
     assert resp.status_code == 200, (resp.status_code, resp.body)

@@ -400,7 +400,8 @@ class Settings(BaseSettings):
     # Master switch for the stateful extraction rung: a turn that produced
     # only reasoning (finish_reason=stop, no content, no tool calls) seeds the
     # reasoning as a resource and lets the model page through it via the
-    # namespaced ``gauze_read`` tool, rather than re-thinking from scratch.
+    # configured read tool (``extract_tool_name``, default ``gauze_read``),
+    # rather than re-thinking from scratch.
     extract_enabled: bool = _field(
         True,
         "Master switch for recovering a visible answer from a think-only turn.",
@@ -417,13 +418,18 @@ class Settings(BaseSettings):
     )
 
     # User message appended at seed time, telling the model its answer is in
-    # its reasoning and to page through it via ``gauze_read``.
+    # its reasoning and to page through it via the configured read tool
+    # (``extract_tool_name``, default ``gauze_read``).
+    #
+    # Coupling: the default text below names the tool literally (``gauze_read``).
+    # If you override ``extract_tool_name``, also override this instruction so
+    # the seeded message still names the tool that is actually registered.
     extract_instruction_text: str = _field(
         "Your previous reply contained only chain-of-thought reasoning and no "
         "visible answer. Use the gauze_read tool to page through your reasoning "
         "in bounded windows, then produce the final visible answer.",
         "User message appended at seed time, telling the model to page its "
-        "reasoning via gauze_read.",
+        "reasoning via the configured read tool (default gauze_read).",
         "Extraction (recover answer from reasoning)",
     )
 
@@ -436,11 +442,11 @@ class Settings(BaseSettings):
         ge=0,
     )
 
-    # Upper bound on ``line_count`` in a ``gauze_read`` call, enforcing O(window)
-    # context instead of O(stream).
+    # Upper bound on ``line_count`` in a read-tool call (``extract_tool_name``),
+    # enforcing O(window) context instead of O(stream).
     extract_max_window_lines: int = _field(
         200,
-        "Upper bound on line_count in a gauze_read call, enforcing O(window) context.",
+        "Upper bound on line_count in a read-tool call, enforcing O(window) context.",
         "Extraction (recover answer from reasoning)",
         gt=0,
     )

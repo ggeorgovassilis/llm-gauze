@@ -283,7 +283,7 @@ bounded windows. The state machine has two modes:
 - **Seed** — fired when a turn matches the empty-reasoning-only shape. The
   policy appends a system message defining the `gauze_read` tool
   (`resource`, `line_from`, `line_count`) and a user turn carrying the
-  `EXTRACT_INSTRUCTION`. The captured reasoning is held in policy state and is
+  `EXTRACT_INSTRUCTION_TEXT`. The captured reasoning is held in policy state and is
   *never* embedded in the request body.
 - **Read-exec** — fired when the model answers with a `gauze_read` tool call.
   The policy reads the requested line window from its held resource and

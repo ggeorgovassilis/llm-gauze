@@ -44,6 +44,15 @@ _FILTER_KEYS = {
 _BOOL_FILTER_KEYS = {"has_tool_calls", "retryable"}
 _TIMESTAMP_FILTER_KEYS = {"since", "until"}
 
+# Keyword-only annotations we know how to validate, with a human-readable
+# description and the value types accepted for them.  ``bool`` has to be
+# checked explicitly because it is a subclass of ``int``.
+_OPTION_TYPES: dict[Any, tuple[str, tuple[type, ...]]] = {
+    bool: ("a boolean (true or false)", (bool,)),
+    int: ("an integer", (int,)),
+    float: ("a number", (int, float)),
+}
+
 
 def _parse_value(text: str) -> Any:
     lowered = text.lower()
@@ -59,6 +68,21 @@ def _parse_value(text: str) -> Any:
         return float(text)
     except ValueError:
         return text
+
+
+def _validate_option(digest: str, key: str, text: str, annotation: Any) -> Any:
+    """Parse a ``key=value`` digest option and check it against the signature."""
+    value = _parse_value(text)
+    expected = _OPTION_TYPES.get(annotation)
+    if expected is None:
+        return value
+    description, accepted = expected
+    # ``bool`` is a subclass of ``int``, so an ``int`` option must reject
+    # ``true``/``false`` explicitly.
+    valid = isinstance(value, accepted) and not (isinstance(value, bool) and bool not in accepted)
+    if not valid:
+        raise ValueError(f"digest {digest!r} option {key!r} requires {description}, got {text!r}")
+    return value
 
 
 def _pairs(tokens: Iterable[str]) -> list[tuple[str, str]]:
@@ -154,19 +178,24 @@ def parse_stage(text: str) -> Any:
         digest = args[0]
         if digest not in DIGESTS:
             raise ValueError(f"unknown digest {digest!r}; choose from {', '.join(sorted(DIGESTS))}")
-        options = {key: _parse_value(value) for key, value in _pairs(args[1:])}
-        allowed = {
-            name
-            for name, parameter in inspect.signature(DIGESTS[digest]).parameters.items()
+        raw_options = _pairs(args[1:])
+        options: dict[str, Any] = {}
+        parameters = {
+            name: parameter
+            for name, parameter in inspect.signature(
+                DIGESTS[digest], eval_str=True
+            ).parameters.items()
             if parameter.kind is inspect.Parameter.KEYWORD_ONLY
         }
-        unknown = sorted(set(options) - allowed)
+        unknown = sorted({key for key, _ in raw_options} - set(parameters))
         if unknown:
-            choices = ", ".join(sorted(allowed)) or "none"
+            choices = ", ".join(sorted(parameters)) or "none"
             raise ValueError(
                 f"unknown digest option(s) {', '.join(unknown)} for {digest!r}; "
                 f"choose from {choices}"
             )
+        for key, text in raw_options:
+            options[key] = _validate_option(digest, key, text, parameters[key].annotation)
         return Digest(digest, **options)
     raise ValueError(f"unknown pipeline stage {name!r}; choose read, filter, project or digest")
 

@@ -73,6 +73,25 @@ def test_parse_stage_rejects_unknown_digest_options():
         parse_stage("digest narrative max_texts=1000")
 
 
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "digest stuck retry_storm_threshold=abc",
+        "digest stuck retry_storm_threshold=",
+        "digest stuck retry_storm_threshold=true",
+        "digest stuck retry_storm_threshold=2.5",
+        "digest narrative max_text=",
+        "digest narrative max_text=lots",
+        "digest stuck include_idle=nope",
+        "digest stuck include_idle=1",
+        "digest narrative include_history=",
+    ],
+)
+def test_parse_stage_rejects_malformed_digest_option_values(spec):
+    with pytest.raises(ValueError, match="requires"):
+        parse_stage(spec)
+
+
 def test_parse_stage_accepts_documented_digest_options():
     stage = parse_stage("digest stuck retry_storm_threshold=3 include_idle=true")
     assert isinstance(stage, Digest)
@@ -227,6 +246,24 @@ def test_cli_reports_invalid_filter_and_digest_options(tmp_path, capsys):
     stderr = capsys.readouterr().err
     assert "numeric unix timestamp" in stderr
     assert "unknown digest option" in stderr
+
+
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        (["digest", "stuck", "retry_storm_threshold=abc"], "requires an integer"),
+        (["digest", "narrative", "max_text="], "requires an integer"),
+        (["digest", "stuck", "include_idle=nope"], "requires a boolean"),
+    ],
+)
+def test_cli_reports_malformed_digest_option_values(tmp_path, capsys, spec, expected):
+    write_recording(tmp_path, sample_records())
+    with pytest.raises(SystemExit) as exc:
+        main(["read", str(tmp_path), "|", *spec])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert expected in err
+    assert "Traceback" not in err
 
 
 def test_render_formats_dicts_and_streams():

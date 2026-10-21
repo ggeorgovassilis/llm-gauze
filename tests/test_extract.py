@@ -508,3 +508,22 @@ def test_watchdog_abort_without_extraction_leaves_counter_unchanged(tmp_path):
     assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
     data = json.loads(resp.body)
     assert data["error"]["type"] == "loop_detected", data
+
+
+def test_watchdog_abort_with_unseeded_extraction_leaves_counter_unchanged(tmp_path):
+    # Extraction is enabled so the rung is present, but no think-only seed has
+    # run (last_mode is still None). A visible-content loop still aborts, and
+    # the unseeded rung must not count the abort against `extract_aborts_total`.
+    # Guards the `last_mode is not None` clause in _forward_streaming.
+    sentence = "This line repeats before any reasoning has been extracted."
+    loop_turn = [
+        _chunk({"role": "assistant", "content": ""}),
+        *[_chunk({"content": sentence + ". "}) for _ in range(40)],
+        _chunk({}, finish_reason="stop"),
+    ]
+    resp, before, after = _run_watchdog_abort([{"chunks": loop_turn}], tmp_path)
+    assert after == before, (before, after)
+
+    assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
+    data = json.loads(resp.body)
+    assert data["error"]["type"] == "loop_detected", data

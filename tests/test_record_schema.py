@@ -231,7 +231,7 @@ def test_extract_pass_moves_turn_to_pre_remediation_body(tmp_path):
             think_cleanup_enabled=True,
             think_empty_response_placeholder="PLACEHOLDER",
             extract_enabled=True,
-            extract_instruction="PLEASE_PAGE_AND_ANSWER",
+            extract_instruction_text="PLEASE_PAGE_AND_ANSWER",
             extract_max_attempts=2,
         ):
             recorder = Recorder(record_path)

@@ -75,7 +75,7 @@ class ExtractionPolicy(Remediation):
 
     @classmethod
     def from_settings(cls) -> "ExtractionPolicy":
-        return cls(settings.extract_instruction, settings.extract_max_attempts)
+        return cls(settings.extract_instruction_text, settings.extract_max_attempts)
 
     # --- triggers -----------------------------------------------------
 

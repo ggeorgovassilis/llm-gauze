@@ -396,7 +396,7 @@ class Settings(BaseSettings):
         "Think-tag cleanup",
     )
 
-    # --- Extraction (recover answer from think-only turns) -----------
+    # --- Extraction (recover answer from reasoning) ------------------
     # Master switch for the stateful extraction rung: a turn that produced
     # only reasoning (finish_reason=stop, no content, no tool calls) seeds the
     # reasoning as a resource and lets the model page through it via the
@@ -404,26 +404,45 @@ class Settings(BaseSettings):
     extract_enabled: bool = _field(
         True,
         "Master switch for recovering a visible answer from a think-only turn.",
-        "Extraction (recover answer from think-only turns)",
+        "Extraction (recover answer from reasoning)",
     )
 
-    # Instruction appended as a ``user`` message on the seeded re-submission.
-    extract_instruction: str = _field(
+    # Namespaced read tool; matched by exact name so a client tool with a
+    # similar name is never intercepted.
+    extract_tool_name: str = _field(
+        "gauze_read",
+        "Namespaced read tool name, matched by exact name.",
+        "Extraction (recover answer from reasoning)",
+        min_length=1,
+    )
+
+    # User message appended at seed time, telling the model its answer is in
+    # its reasoning and to page through it via ``gauze_read``.
+    extract_instruction_text: str = _field(
         "Your previous reply contained only chain-of-thought reasoning and no "
         "visible answer. Use the gauze_read tool to page through your reasoning "
         "in bounded windows, then produce the final visible answer.",
-        "Instruction appended as a user message on the seeded re-submission.",
-        "Extraction (recover answer from think-only turns)",
+        "User message appended at seed time, telling the model to page its "
+        "reasoning via gauze_read.",
+        "Extraction (recover answer from reasoning)",
     )
 
-    # Maximum number of extraction re-submissions (seed plus reads) before
-    # falling back to the placeholder floor (see
-    # ``think_empty_response_placeholder``).
+    # Rung budget: the seed and every read share it.
     extract_max_attempts: int = _field(
         3,
-        "Max extraction re-submissions before falling back to the placeholder floor.",
-        "Extraction (recover answer from think-only turns)",
+        "Max extraction re-submissions (seed plus reads) before falling back "
+        "to the placeholder floor.",
+        "Extraction (recover answer from reasoning)",
         ge=0,
+    )
+
+    # Upper bound on ``line_count`` in a ``gauze_read`` call, enforcing O(window)
+    # context instead of O(stream).
+    extract_max_window_lines: int = _field(
+        200,
+        "Upper bound on line_count in a gauze_read call, enforcing O(window) context.",
+        "Extraction (recover answer from reasoning)",
+        gt=0,
     )
 
     # --- Coast detection (announced-but-absent tool call) -------------

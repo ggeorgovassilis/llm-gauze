@@ -92,13 +92,15 @@ below, grouped by feature, with its default.
 | `THINK_TAGS` | `think,thinking,reasoning` | Comma-separated tag names (case-insensitive) whose inner text is relocated into reasoning_content. |
 | `THINK_EMPTY_RESPONSE_PLACEHOLDER` | `The model replied inside a thinking tag; see reasoning_content.` | Placeholder emitted as visible content when the model produced only a thinking tag. |
 
-## Extraction (recover answer from think-only turns)
+## Extraction (recover answer from reasoning)
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `EXTRACT_ENABLED` | `true` | Master switch for recovering a visible answer from a think-only turn. |
-| `EXTRACT_INSTRUCTION` | `Your previous reply contained only chain-of-thought reasoning and no visible answer. Use the gauze_read tool to page through your reasoning in bounded windows, then produce the final visible answer.` | Instruction appended as a user message on the seeded re-submission. |
-| `EXTRACT_MAX_ATTEMPTS` | `3` | Max extraction re-submissions before falling back to the placeholder floor. |
+| `EXTRACT_TOOL_NAME` | `gauze_read` | Namespaced read tool name, matched by exact name. |
+| `EXTRACT_INSTRUCTION_TEXT` | `Your previous reply contained only chain-of-thought reasoning and no visible answer. Use the gauze_read tool to page through your reasoning in bounded windows, then produce the final visible answer.` | User message appended at seed time, telling the model to page its reasoning via gauze_read. |
+| `EXTRACT_MAX_ATTEMPTS` | `3` | Max extraction re-submissions (seed plus reads) before falling back to the placeholder floor. |
+| `EXTRACT_MAX_WINDOW_LINES` | `200` | Upper bound on line_count in a gauze_read call, enforcing O(window) context. |
 
 ## Coast detection
 

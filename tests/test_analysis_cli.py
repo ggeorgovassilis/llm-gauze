@@ -42,6 +42,12 @@ def test_parse_stage_projects_aliases_as_a_mapping():
     assert alias_only.fields == {"why": "diagnosis.reason"}
 
 
+def test_parse_stage_tolerates_empty_project_tokens():
+    stage = parse_stage("project id,,why=diagnosis.reason,")
+    assert isinstance(stage, Project)
+    assert stage.fields == {"id": "id", "why": "diagnosis.reason"}
+
+
 def test_parse_stage_rejects_malformed_project_aliases():
     with pytest.raises(ValueError, match="alias=path"):
         parse_stage("project =diagnosis.reason")

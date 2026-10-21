@@ -98,9 +98,9 @@ below, grouped by feature, with its default.
 | --- | --- | --- |
 | `EXTRACT_ENABLED` | `true` | Master switch for recovering a visible answer from a think-only turn. |
 | `EXTRACT_TOOL_NAME` | `gauze_read` | Namespaced read tool name, matched by exact name. |
-| `EXTRACT_INSTRUCTION_TEXT` | `Your previous reply contained only chain-of-thought reasoning and no visible answer. Use the gauze_read tool to page through your reasoning in bounded windows, then produce the final visible answer.` | User message appended at seed time, telling the model to page its reasoning via gauze_read. |
+| `EXTRACT_INSTRUCTION_TEXT` | `Your previous reply contained only chain-of-thought reasoning and no visible answer. Use the gauze_read tool to page through your reasoning in bounded windows, then produce the final visible answer.` | User message appended at seed time, telling the model to page its reasoning via the configured read tool (default gauze_read). |
 | `EXTRACT_MAX_ATTEMPTS` | `3` | Max extraction re-submissions (seed plus reads) before falling back to the placeholder floor. |
-| `EXTRACT_MAX_WINDOW_LINES` | `200` | Upper bound on line_count in a gauze_read call, enforcing O(window) context. |
+| `EXTRACT_MAX_WINDOW_LINES` | `200` | Upper bound on line_count in a read-tool call, enforcing O(window) context. |
 
 ## Coast detection
 

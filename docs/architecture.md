@@ -97,7 +97,11 @@ not change the "implement and register" contract.
   `ContentWatchdog` that flags repetitive output via byte-window compression
   entropy.
 - `app/remediation/stall.py` — `StallDetector`, a time-based watchdog that
-  flags a stream which has stopped producing content tokens (silent hang).
+  flags a stream which has stopped producing content tokens (silent hang) or
+  is trickling below the minimum-speed floor.
+- `app/remediation/deadlines.py` — header-phase and total-exchange wall-clock
+  deadlines (`HeaderTimeoutError` / `TotalDeadlineError`), applied at the
+  dispatch boundary in both the streaming and buffered paths.
 - `app/remediation/context.py` — `ContextWindowDetector`, which recognises the
   upstream's context-window-fill error and reclassifies it non-retryable.
 - `app/remediation/think.py` — `ThinkContentGuard`, a *transform* (not a
@@ -204,9 +208,20 @@ Stall detection is therefore a **time** signal rather than a content signal:
   a large prompt is legitimately slow.
 - **inter-token gap** (`STALL_GAP_SECONDS`) — tighter, once generation has
   begun.
+- **minimum-speed floor** (`STALL_MIN_SPEED_TPS` over
+  `STALL_SPEED_WINDOW_SECONDS`) — the gap timer alone is defeated by a slow
+  *trickle*: tokens arriving just under the gap interval reset it forever. Once
+  the first token has arrived, the stream must therefore sustain a minimum
+  token rate over a sliding window, or it is declared stalled. Tokens are
+  estimated from content-bearing characters (reasoning + content + tool-call
+  arguments) at the usual ~4 chars/token. The floor is deliberately low
+  (default 1 t/s) so weak hardware at 2–10 t/s passes; a ~0.007 t/s trickle
+  trips within seconds. `STALL_SPEED_FLOOR_ENABLED` restores gap-only
+  behaviour.
 - The streaming loop bounds each read with `asyncio.wait_for` using the
-  detector's remaining budget, so a silent stream trips the watchdog even while
-  keepalives continue to arrive.
+  detector's remaining budget *and* polls `StallDetector.check()` after every
+  frame, so a trickle that keeps reads alive still trips the speed floor
+  promptly.
 - On detection the gateway records `abort_kind=stalled` and returns a
   `stall_abort_status` error (never retried).
 
@@ -375,6 +390,12 @@ an empty reply (see #17).
 The fingerprint is the invariant **reasoning tokens keep flowing while content
 tokens stay at zero**. Two windows observe it:
 
+> The threshold is a *budget*, not a speed check: the stall detector's
+> minimum-speed floor bounds how fast tokens arrive, while this detector bounds
+> how much reasoning the model is allowed before it must answer. Keeping the two
+> separate is why `RUNAWAY_REASONING_TOKEN_THRESHOLD` can stay at a sane default
+> (2000) without absorbing slow-trickle cases.
+
 1. **Proactive (streaming)** — `RunawayReasoningDetector`, a token-count
    watchdog over the reasoning stream. Once the reasoning token budget
    (`RUNAWAY_REASONING_TOKEN_THRESHOLD`, ~4 chars/token) is exceeded with no
@@ -511,6 +532,22 @@ looks like an "immediate failure" to a client with a shorter timeout.
   because generation is slow.
 
 These map onto `httpx.Timeout(connect=…, read=…, write=…, pool=…)`.
+
+httpx's per-read timeout does not bound two other hang modes, which get their
+own wall-clock deadlines at the dispatch boundary:
+
+- **header deadline** (`HEADER_TIMEOUT_SECONDS`, default 60s) — a connection
+  can be accepted and then never send response headers. Header generation does
+  not depend on model speed, so this is short. Fires as
+  `HeaderTimeoutError` (reason `header_timeout`).
+- **total deadline** (`TOTAL_DEADLINE_SECONDS`, default 1200s) — a coarse
+  backstop over the whole per-attempt exchange (connect → headers → stream),
+  set comfortably above a full 8k-token reply at ~10 t/s (~14 min). Fires as
+  `TotalDeadlineError` (reason `total_deadline`).
+
+Both are retryable and are recorded/telemetered with their distinct reason, so
+operators can tell *why* an attempt died. `HEADER_TIMEOUT_ENABLED` and
+`TOTAL_DEADLINE_ENABLED` restore the previous unbounded behaviour.
 
 ## Phases
 

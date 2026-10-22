@@ -19,6 +19,7 @@ import httpx
 
 from app.config import settings
 from app.remediation.base import StreamVerdict, VerdictKind
+from app.remediation.deadlines import wait_for_header, wait_for_total
 from app.remediation.loop import ThinkingLoopDetector
 from app.remediation.runaway import RunawayReasoningDetector
 from app.remediation.stall import StallDetector
@@ -132,22 +133,43 @@ class StreamingPipeline:
 
         Transport errors propagate to the caller (the proxy classifies them for
         retry); this method is only concerned with reading a healthy stream.
+
+        Two wall-clock deadlines bound the exchange here, independently of
+        httpx's per-read timeout (which a trickling upstream defeats): a short
+        header deadline (headers must arrive quickly regardless of how slow
+        generation later proves) and a generous total deadline for the whole
+        attempt. Each converts to a distinct retryable
+        :class:`~app.remediation.deadlines.UpstreamDeadlineError`.
         """
-        outcome = StreamOutcome()
-        async with self.client.stream(
-            method,
-            url,
-            params=params,
-            content=stream_body,
-            headers=headers,
-        ) as upstream:
-            outcome.status = upstream.status_code
-            outcome.resp_headers = dict(upstream.headers)
-            if outcome.status >= 400:
-                outcome.error_body = await upstream.aread()
+
+        async def _exchange() -> StreamOutcome:
+            outcome = StreamOutcome()
+            request = self.client.build_request(
+                method,
+                url,
+                params=params,
+                content=stream_body,
+                headers=headers,
+            )
+            send = self.client.send(request, stream=True)
+            if settings.header_timeout_enabled:
+                upstream = await wait_for_header(send, settings.header_timeout_seconds)
+            else:
+                upstream = await send
+            try:
+                outcome.status = upstream.status_code
+                outcome.resp_headers = dict(upstream.headers)
+                if outcome.status >= 400:
+                    outcome.error_body = await upstream.aread()
+                    return outcome
+                await self._read_stream(upstream, outcome)
                 return outcome
-            await self._read_stream(upstream, outcome)
-        return outcome
+            finally:
+                await upstream.aclose()
+
+        if settings.total_deadline_enabled:
+            return await wait_for_total(_exchange(), settings.total_deadline_seconds)
+        return await _exchange()
 
     async def _read_stream(self, upstream, outcome: StreamOutcome) -> None:
         """Read SSE frames, feed the watchdogs, and assemble the raw turn."""
@@ -241,7 +263,9 @@ class StreamingPipeline:
                     response.note(content=delta_content)
 
             # Check the watchdogs in the same order as before: reasoning loop,
-            # response loop, then runaway reasoning.
+            # response loop, then runaway reasoning, then stall. The stall
+            # check is also run here (not only on read timeouts) so a speed
+            # floor trips promptly when a trickle keeps the read alive.
             if thinking is not None:
                 verdict = thinking.check()
                 if verdict is not None:
@@ -259,6 +283,12 @@ class StreamingPipeline:
                 if verdict is not None:
                     outcome.verdict = verdict
                     outcome.verdict_stream = "reasoning"
+                    return
+            if stall is not None:
+                verdict = stall.check()
+                if verdict is not None:
+                    outcome.verdict = verdict
+                    outcome.verdict_stream = "stalled"
                     return
 
         if not seen_choices:

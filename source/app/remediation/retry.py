@@ -10,6 +10,7 @@ import random
 import httpx
 
 from app.remediation.base import Backoff, Detector, Diagnosis
+from app.remediation.deadlines import UpstreamDeadlineError
 
 logger = logging.getLogger("llm_gauze.remediation.retry")
 
@@ -37,6 +38,8 @@ class RetryableDetector(Detector):
         self.retryable_statuses = set(retryable_statuses)
 
     def diagnose_exception(self, exc: Exception) -> Diagnosis:
+        if isinstance(exc, UpstreamDeadlineError):
+            return Diagnosis(retryable=True, reason=exc.reason)
         if isinstance(exc, _RETRYABLE_EXCEPTIONS):
             return Diagnosis(
                 retryable=True,

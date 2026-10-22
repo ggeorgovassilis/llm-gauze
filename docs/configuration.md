@@ -74,7 +74,19 @@ below, grouped by feature, with its default.
 | `STALL_DETECTION_ENABLED` | `true` | Master switch for stall detection. |
 | `STALL_TTFT_SECONDS` | `120` | Max seconds to wait for the first content-bearing token after headers. |
 | `STALL_GAP_SECONDS` | `60` | Max seconds between content-bearing tokens once generation has started. |
+| `STALL_SPEED_FLOOR_ENABLED` | `true` | Master switch for the minimum-speed floor (tokens/sec over a sliding window). |
+| `STALL_MIN_SPEED_TPS` | `1` | Minimum sustained content-bearing tokens/second over the speed window. |
+| `STALL_SPEED_WINDOW_SECONDS` | `60` | Sliding window in seconds over which the minimum speed floor is enforced. |
 | `STALL_ABORT_STATUS` | `502` | HTTP status returned when a stall is detected. |
+
+## Deadlines (header/total)
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `HEADER_TIMEOUT_ENABLED` | `true` | Master switch for the header-phase deadline. |
+| `HEADER_TIMEOUT_SECONDS` | `60` | Max seconds to wait for upstream response headers. |
+| `TOTAL_DEADLINE_ENABLED` | `true` | Master switch for the total-exchange deadline. |
+| `TOTAL_DEADLINE_SECONDS` | `1200` | Max wall-clock seconds for the entire upstream exchange. |
 
 ## Context-window overflow
 

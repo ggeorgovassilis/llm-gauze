@@ -36,7 +36,8 @@ telemetry layer already emits as the `outcome` label on `requests_total`:
 
 * `success` — a body was delivered to the client.
 * `http_error` — the upstream answered with a 4xx/5xx that was passed through.
-* `upstream_failure` — a transport error, or a failure with no usable status.
+* `upstream_failure` — a transport error, deadline, or a failure with no usable
+  status (see [Attempt-failure fields](#attempt-failure-fields)).
 * `loop_aborted` — a loop verdict aborted the request, or a loop-retry
   re-submission was triggered.
 * `stalled` — a stall verdict aborted the request.
@@ -61,6 +62,35 @@ The pre-remediation turn that an extraction, coast or empty-stop
 re-submission discards is **not** written to `response_body`; it lives in
 `pre_remediation_body` (a string, decoded from the reconstructed turn) so both
 bodies stay distinguishable.
+
+## Attempt-failure fields
+
+An attempt that ends in `upstream_failure` carries two parallel views of *why*:
+a raw `error` and a classified `diagnosis`. Both are optional (a successful
+attempt has neither; `http_error` records have a diagnosis for the status).
+
+`error` is the raw failure, populated only when an exception escaped the
+exchange:
+
+| Field | Meaning |
+| --- | --- |
+| `error.type` | Stable label for the failure. Wall-clock deadline errors use their reason (`header_timeout`, `total_deadline`); everything else uses the exception's class name (`ReadTimeout`, `ConnectError`, `RemoteProtocolError`, …). |
+| `error.message` | The exception's message. |
+| `error.traceback` | Formatted traceback, for post-hoc forensics. |
+
+`diagnosis` is the retry classifier's verdict on that failure (or on a
+non-2xx status):
+
+| Field | Meaning |
+| --- | --- |
+| `diagnosis.retryable` | Whether the failure is worth another attempt. |
+| `diagnosis.reason` | Human-readable reason. Deadline failures use the distinct reasons `header_timeout` and `total_deadline`; transient exceptions read `transient upstream error <Class>: <message>`; statuses read `retryable HTTP status <code>` / `non-retryable HTTP status <code>`. |
+| `diagnosis.code` | Present only for special classifications (e.g. `context_window_exceeded`). |
+
+Because `error.type` and `diagnosis.reason` are distinct per failure mode, an
+operator can tell a hung header phase (`header_timeout`) from a stream that
+outlived its total budget (`total_deadline`) without reading tracebacks. The
+same labels are emitted as the `type` label on `upstream_errors_total`.
 
 ## Remediation-pass records
 

@@ -8,6 +8,7 @@ here causes retry storms or silently swallows transient failures.
 
 import httpx
 import pytest
+from app.remediation.deadlines import HeaderTimeoutError, TotalDeadlineError
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 
 
@@ -57,6 +58,17 @@ def test_retryable_exception_categories():
     assert detector.diagnose_exception(ConnectionResetError("reset")).retryable
     # asyncio-level TimeoutError is retryable.
     assert detector.diagnose_exception(TimeoutError("async timeout")).retryable
+
+
+def test_deadline_errors_are_retryable_with_distinct_reasons():
+    detector = RetryableDetector({500, 502, 503})
+    header = detector.diagnose_exception(HeaderTimeoutError("no headers"))
+    assert header.retryable
+    assert header.reason == "header_timeout"
+
+    total = detector.diagnose_exception(TotalDeadlineError("too slow"))
+    assert total.retryable
+    assert total.reason == "total_deadline"
 
 
 def test_non_transient_exception_is_not_retryable():

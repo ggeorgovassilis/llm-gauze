@@ -19,14 +19,16 @@ _chunk = chunk
 _sse = sse
 
 
-def _run_forward(tmp_path, steps):
+def _run_forward(tmp_path, steps, **overrides):
     with MockUpstream([{"steps": steps}]) as mock:
-        with settings_override(
-            llm_base_url=mock.url,
-            stall_detection_enabled=True,
-            stall_ttft_seconds=0.2,
-            stall_gap_seconds=0.3,
-        ):
+        base = {
+            "llm_base_url": mock.url,
+            "stall_detection_enabled": True,
+            "stall_ttft_seconds": 0.2,
+            "stall_gap_seconds": 0.3,
+        }
+        base.update(overrides)
+        with settings_override(**base):
             recorder = Recorder(tmp_path / "stall_integration.jsonl")
             proxy = Proxy(recorder)
             body = json.dumps(
@@ -138,3 +140,32 @@ def test_stall_abort_records_partial_output(tmp_path):
     abort = [r for r in records if r.get("abort_kind") == VerdictKind.STALLED.value][-1]
     assert abort["partial_reasoning"] == "about to call a tool", abort
     assert abort["partial_content"] is None, abort
+
+
+def test_speed_floor_aborts_trickling_stream(tmp_path):
+    """A trickle that never trips the gap timer still trips the speed floor.
+
+    Tokens arrive every 0.15s (well inside a 60s gap budget), so pre-#148 the
+    stream would hang until the read timeout. The floor is configured higher
+    than the trickle rate, so the watchdog must abort within the window.
+    """
+    steps = [(0.15, _sse(_chunk({"content": "a"}))) for _ in range(40)]
+    resp = _run_forward(
+        tmp_path,
+        steps,
+        stall_ttft_seconds=10.0,
+        stall_gap_seconds=60.0,
+        stall_min_speed_tps=4.0,
+        stall_speed_window_seconds=0.5,
+        stall_speed_floor_enabled=True,
+    )
+    assert resp.status_code == settings.stall_abort_status, (resp.status_code, resp.body)
+    data = json.loads(resp.body)
+    assert data["error"]["type"] == "stalled_detected", data
+    assert "minimum speed" in data["error"]["reason"], data
+
+    records = [
+        json.loads(line) for line in open(tmp_path / "stall_integration.jsonl") if line.strip()
+    ]
+    abort = [r for r in records if r.get("abort_kind") == VerdictKind.STALLED.value][-1]
+    assert abort["abort_details"]["min_speed_tps"] == 4.0, abort

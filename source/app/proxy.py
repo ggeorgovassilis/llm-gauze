@@ -35,6 +35,7 @@ from app.remediation.base import (
 )
 from app.remediation.coast import CoastPolicy
 from app.remediation.context import ContextWindowDetector
+from app.remediation.deadlines import UpstreamDeadlineError, wait_for_header, wait_for_total
 from app.remediation.empty_stop import EmptyStopPolicy, token_counts
 from app.remediation.extract import ExtractionPolicy
 from app.remediation.loop_retry import LoopRetryPolicy
@@ -105,6 +106,17 @@ def _decode(data: bytes) -> str | None:
     if not data:
         return None
     return data.decode("utf-8", errors="replace")
+
+
+def _error_type(exc: Exception) -> str:
+    """Stable telemetry/recorder label for a transport/stream error.
+
+    Deadline errors carry a distinct ``reason`` (``header_timeout`` /
+    ``total_deadline``); everything else is labelled by its class name.
+    """
+    if isinstance(exc, UpstreamDeadlineError):
+        return exc.reason
+    return type(exc).__name__
 
 
 def _diagnosis_entry(diagnosis) -> dict | None:
@@ -624,20 +636,42 @@ class Proxy:
             diagnosis = None
 
             try:
-                upstream = await self.client.request(
-                    method,
-                    url,
-                    params=query,
-                    content=body,
-                    headers=headers,
-                )
-                status = upstream.status_code
-                resp_headers = dict(upstream.headers)
-                resp_body = upstream.content
+                # Bound the exchange with a short header deadline (headers must
+                # arrive quickly) and a generous total deadline, mirroring the
+                # streaming pipeline. Each fires as a distinct retryable
+                # UpstreamDeadlineError (`header_timeout` / `total_deadline`).
+                async def _exchange() -> tuple[int, dict, bytes]:
+                    request = self.client.build_request(
+                        method,
+                        url,
+                        params=query,
+                        content=body,
+                        headers=headers,
+                    )
+                    send = self.client.send(request, stream=True)
+                    if settings.header_timeout_enabled:
+                        upstream = await wait_for_header(send, settings.header_timeout_seconds)
+                    else:
+                        upstream = await send
+                    try:
+                        status = upstream.status_code
+                        resp_headers = dict(upstream.headers)
+                        resp_body = await upstream.aread()
+                        return status, resp_headers, resp_body
+                    finally:
+                        await upstream.aclose()
+
+                if settings.total_deadline_enabled:
+                    upstream_status, resp_headers, resp_body = await wait_for_total(
+                        _exchange(), settings.total_deadline_seconds
+                    )
+                else:
+                    upstream_status, resp_headers, resp_body = await _exchange()
+                status = upstream_status
                 diagnosis = policy.detector.diagnose_status(status, body=resp_body)
             except Exception as exc:  # noqa: BLE001 - capture everything
                 error = {
-                    "type": type(exc).__name__,
+                    "type": _error_type(exc),
                     "message": str(exc),
                     "traceback": traceback.format_exc(),
                 }
@@ -987,7 +1021,7 @@ class Proxy:
                 sse_lines = outcome.sse_lines
             except Exception as exc:  # noqa: BLE001 - capture everything
                 error = {
-                    "type": type(exc).__name__,
+                    "type": _error_type(exc),
                     "message": str(exc),
                     "traceback": traceback.format_exc(),
                 }

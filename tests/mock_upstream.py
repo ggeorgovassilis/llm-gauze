@@ -13,6 +13,10 @@ serves a response spec. Three spec shapes are supported:
 * ``{"status": int, "content_type": str, "body": bytes}`` — a fixed HTTP reply
   (used by the context-window error tests).
 
+Any spec may include ``"header_delay": seconds`` to hold the connection open
+(no response headers) for that long before serving the response; the
+header-timeout tests rely on it.
+
 Every request body is captured on :attr:`MockUpstream.requests` and its headers
 on :attr:`MockUpstream.request_headers`.
 """
@@ -20,7 +24,7 @@ on :attr:`MockUpstream.request_headers`.
 import json
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from app.config import settings
 
@@ -86,34 +90,39 @@ class _Handler(BaseHTTPRequestHandler):
         upstream.request_paths.append(self.path)
         upstream.request_headers.append({k.lower(): v for k, v in self.headers.items()})
         spec = upstream.spec_for(len(upstream.requests) - 1)
+        try:
+            # Optional header-phase delay: accept the connection and read the
+            # request, but wait before sending response headers (used by the
+            # header-timeout tests).
+            header_delay = spec.get("header_delay", 0)
+            if header_delay:
+                time.sleep(header_delay)
 
-        if "chunks" in spec:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.end_headers()
-            for c in spec["chunks"]:
-                try:
+            if "chunks" in spec:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                for c in spec["chunks"]:
                     self.wfile.write(sse(c))
                     self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    break
-        elif "steps" in spec:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.end_headers()
-            for delay, payload in spec["steps"]:
-                time.sleep(delay)
-                try:
+            elif "steps" in spec:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                for delay, payload in spec["steps"]:
+                    time.sleep(delay)
                     self.wfile.write(payload)
                     self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    break
-        else:
-            self.send_response(spec["status"])
-            self.send_header("Content-Type", spec.get("content_type", "application/json"))
-            self.send_header("Content-Length", str(len(spec["body"])))
-            self.end_headers()
-            self.wfile.write(spec["body"])
+            else:
+                self.send_response(spec["status"])
+                self.send_header("Content-Type", spec.get("content_type", "application/json"))
+                self.send_header("Content-Length", str(len(spec["body"])))
+                self.end_headers()
+                self.wfile.write(spec["body"])
+        except (BrokenPipeError, ConnectionResetError):
+            # The client gave up (deadline, retry exhaustion, or a test
+            # teardown); nothing more to do.
+            pass
 
     def log_message(self, *args):  # silence request logging
         pass
@@ -133,7 +142,7 @@ class MockUpstream:
         self.requests = []  # raw request bodies, one per POST, in order
         self.request_paths = []
         self.request_headers = []  # lower-cased header dicts, parallel to `requests`
-        self.server = HTTPServer(("127.0.0.1", 0), _Handler)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         _Handler.upstream = self
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)

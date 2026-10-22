@@ -317,6 +317,35 @@ class Settings(BaseSettings):
         gt=0,
     )
 
+    # Master switch for the minimum-speed floor. When enabled, a stream that
+    # has begun producing tokens must sustain at least stall_min_speed_tps
+    # tokens/second (estimated from ~4 chars/token) over the trailing
+    # stall_speed_window_seconds, or it is declared stalled — even if tokens
+    # keep trickling in just under the gap timer.
+    stall_speed_floor_enabled: bool = _field(
+        True,
+        "Master switch for the minimum-speed floor (tokens/sec over a sliding window).",
+        "Stall detection",
+    )
+
+    # Minimum sustained content-bearing tokens per second once generation has
+    # started. A steady 2+ t/s stream must never trip this; a ~0.007 t/s
+    # trickle must trip within seconds.
+    stall_min_speed_tps: float = _field(
+        1.0,
+        "Minimum sustained content-bearing tokens/second over the speed window.",
+        "Stall detection",
+        gt=0,
+    )
+
+    # Sliding window, in seconds, over which stall_min_speed_tps is enforced.
+    stall_speed_window_seconds: float = _field(
+        60.0,
+        "Sliding window in seconds over which the minimum speed floor is enforced.",
+        "Stall detection",
+        gt=0,
+    )
+
     # HTTP status returned to the client when a stall is detected.
     stall_abort_status: int = _field(
         502,
@@ -324,6 +353,44 @@ class Settings(BaseSettings):
         "Stall detection",
         ge=100,
         le=599,
+    )
+
+    # --- Deadlines (header/total wall-clock bounds) ------------------
+    # Master switch for the header-phase deadline. A connection that is
+    # accepted but never sends response headers is aborted after
+    # header_timeout_seconds and retried (reason "header_timeout").
+    header_timeout_enabled: bool = _field(
+        True,
+        "Master switch for the header-phase deadline.",
+        "Deadlines (header/total)",
+    )
+
+    # Max wall-clock seconds to wait for upstream response *headers*. Kept
+    # short because header generation is not affected by model speed — headers
+    # must arrive quickly regardless of how slow the eventual stream is.
+    header_timeout_seconds: float = _field(
+        60.0,
+        "Max seconds to wait for upstream response headers.",
+        "Deadlines (header/total)",
+        gt=0,
+    )
+
+    # Master switch for the total-exchange deadline. When disabled, the total
+    # wall-clock duration of an attempt is unbounded (other timeouts still apply).
+    total_deadline_enabled: bool = _field(
+        True,
+        "Master switch for the total-exchange deadline.",
+        "Deadlines (header/total)",
+    )
+
+    # Max wall-clock seconds for the entire per-attempt exchange (connect →
+    # headers → stream/body). Generous by default: comfortably above a full
+    # 8k-token reply at ~10 t/s (~14 minutes).
+    total_deadline_seconds: float = _field(
+        1200.0,
+        "Max wall-clock seconds for the entire upstream exchange.",
+        "Deadlines (header/total)",
+        gt=0,
     )
 
     # --- Context-window overflow -------------------------------------

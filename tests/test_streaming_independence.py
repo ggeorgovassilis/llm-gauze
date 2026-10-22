@@ -260,3 +260,41 @@ def test_loop_detection_still_fires_when_enabled(tmp_path):
     )
     assert resp.status_code == settings.loop_abort_status, (resp.status_code, resp.body)
     assert json.loads(resp.body)["error"]["type"] == "loop_detected"
+
+
+def test_runaway_fires_alongside_speed_floor(tmp_path):
+    """The runaway budget is independent of the stall speed floor (#148).
+
+    A *fast* all-reasoning stream exceeds the runaway budget at full speed; the
+    speed floor must neither mask it nor be blamed for it.
+    """
+    steps = [(0.0, _sse(_chunk({"reasoning_content": "thinking " * 20}))) for _ in range(20)]
+    with MockUpstream([{"steps": steps}]) as mock:
+        with settings_override(
+            llm_base_url=mock.url,
+            stall_detection_enabled=True,
+            stall_speed_floor_enabled=True,
+            stall_min_speed_tps=1.0,
+            stall_ttft_seconds=10.0,
+            stall_gap_seconds=60.0,
+            runaway_reasoning_enabled=True,
+            runaway_reasoning_token_threshold=10,
+            runaway_reasoning_max_attempts=1,
+            loop_detection_enabled=False,
+        ):
+            recorder = Recorder(tmp_path / "runaway_floor.jsonl")
+            proxy = Proxy(recorder)
+
+            async def run():
+                request = await make_request(_body(), path="/v1/chat/completions")
+                return await proxy.forward(request, "v1/chat/completions")
+
+            resp = asyncio.run(run())
+
+    assert resp.status_code == settings.runaway_reasoning_abort_status, (
+        resp.status_code,
+        resp.body,
+    )
+    records = [json.loads(line) for line in open(tmp_path / "runaway_floor.jsonl") if line.strip()]
+    abort = [r for r in records if r.get("abort_kind") == "runaway_reasoning"][-1]
+    assert abort["abort_kind"] == "runaway_reasoning", abort

@@ -54,6 +54,8 @@ Definitions used by the script and below:
 | turn | A request whose message list contains at least one `user` message. |
 | verbatim recurrence | Share of occurrences whose text is identical after normalising session-scoped ids. |
 | preamble | System content plus the environment, workspace, date and reminder blocks. It excludes the user's `userRequest` and conversation history. |
+| preamble share before | Pre-trim preamble characters divided by the original serialised request body. |
+| preamble share after | Post-trim preamble characters divided by the *trimmed* serialised request body. |
 | stable prefix | Longest common prefix of concatenated message contents for consecutive requests in one conversation (`x-interaction-id`). |
 | global prefix | Longest common prefix of concatenated message contents across every request in the corpus. |
 
@@ -61,7 +63,9 @@ Definitions used by the script and below:
 
 The stakeholder's floor is at least 100 forwarded requests over at least three
 files, each containing a user turn. The corpus clears it: 2,084 requests over
-five files, each with at least one turn.
+five files, each with at least one turn. The script reports this as
+`corpus.sample_floor` with `minimum_requests`, `minimum_files` and
+`minimum_turns_per_file`; `met` is true only when all three hold.
 
 | File | Bytes | SHA-256 | Records | Requests / turns | Conversations |
 | --- | ---: | --- | ---: | ---: | ---: |
@@ -100,7 +104,10 @@ Each row is a recurring block. Frequency is the number of unique requests that
 contain the block; sizes are per occurrence. "Variants" counts distinct texts
 after normalising session-scoped ids; "dominant" is the share of the most
 common variant. A high dominant share means the block recurs verbatim across
-turns; a low one means the block carries the turn's own content.
+turns; a low one means the block carries the turn's own content. The
+`conversation.history` row is the exception: it has no fixed boundary, so
+"variants" and "dominant" count distinct history *sizes* in characters rather
+than distinct texts.
 
 | Block | Role / position | Requests | Median chars | p95 chars | Variants / dominant | Purpose |
 | --- | --- | ---: | ---: | ---: | --- | --- |
@@ -206,7 +213,7 @@ Applying the starter set to every unique request:
 | Preamble characters before | 6,952 | 7,435 |
 | Preamble characters after | 6,399 | 6,882 |
 | Preamble share of body before | 49.82% | 58.08% |
-| Preamble share of body after | 45.83% | 53.46% |
+| Preamble share of trimmed body after | 47.79% | 56.15% |
 | Stable prefix before | 7,006 | 9,891 |
 | Stable prefix after | 6,453 | 9,299 |
 

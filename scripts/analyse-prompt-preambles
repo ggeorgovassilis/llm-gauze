@@ -677,7 +677,10 @@ def main(argv: list[str] | None = None) -> int:
         preamble_after.append(request_preamble - saved)
         if original_body:
             preamble_share_before.append(request_preamble / len(original_body))
-            preamble_share_after.append((request_preamble - saved) / len(original_body))
+        # The denominator is the trimmed body: this is the share the client
+        # would still be billed for after the rules have run.
+        if serialised:
+            preamble_share_after.append((request_preamble - saved) / len(serialised))
 
     for rule in rules:
         rule_id = str(rule.get("id"))
@@ -716,7 +719,7 @@ def main(argv: list[str] | None = None) -> int:
         if calls:
             mode_stats[mode_key]["tool_calls"] += 1
 
-    taxonomy = []
+    taxonomy: list[dict[str, Any]] = []
     for key, texts in block_texts.items():
         lengths = [len(text) for text in texts]
         variants = Counter(normalise_for_recurrence(text) for text in texts)
@@ -742,6 +745,8 @@ def main(argv: list[str] | None = None) -> int:
             "frequency": 1.0,
             "median_chars": statistics.median(history_sizes) if history_sizes else 0,
             "p95_chars": percentile(history_sizes, 95) if history_sizes else 0,
+            # Unlike the tagged blocks, history is defined by its size, so
+            # variants/dominant count distinct character sizes, not texts.
             "variants": len(set(history_sizes)),
             "dominant_share": round(
                 Counter(history_sizes).most_common(1)[0][1] / len(history_sizes), 6
@@ -792,7 +797,12 @@ def main(argv: list[str] | None = None) -> int:
             "sample_floor": {
                 "minimum_requests": 100,
                 "minimum_files": 3,
-                "met": len(unique) >= 100 and len(manifest) >= 3,
+                "minimum_turns_per_file": 1,
+                "met": (
+                    len(unique) >= 100
+                    and len(manifest) >= 3
+                    and all(entry.get("turns", 0) >= 1 for entry in manifest)
+                ),
             },
             "excluded": ["data/records.jsonl (live, still-growing file)"],
         },
@@ -801,6 +811,8 @@ def main(argv: list[str] | None = None) -> int:
             "turn": "a request whose message list contains at least one user message",
             "units": "character counts; never bytes or tokens",
             "preamble": "system content plus environment, workspace, date and reminder blocks; excludes userRequest and history",
+            "preamble_share_of_body_before": "pre-trim preamble divided by the original serialised request body",
+            "preamble_share_of_trimmed_body_after": "post-trim preamble divided by the trimmed serialised request body",
             "stable_prefix": "longest common prefix of concatenated message contents for consecutive requests in one conversation (x-interaction-id), plus the prefix common to all requests",
         },
         "taxonomy": taxonomy,
@@ -817,7 +829,7 @@ def main(argv: list[str] | None = None) -> int:
             "preamble_chars_before": summary(preamble_before),
             "preamble_chars_after": summary(preamble_after),
             "preamble_share_of_body_before": summary(preamble_share_before),
-            "preamble_share_of_body_after": summary(preamble_share_after),
+            "preamble_share_of_trimmed_body_after": summary(preamble_share_after),
             "idempotent": idempotent_failures == 0,
             "non_idempotent_requests": idempotent_failures,
         },

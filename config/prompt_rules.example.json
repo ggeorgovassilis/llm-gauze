@@ -22,7 +22,7 @@
       "match_rate": 1.0,
       "when": {
         "role": "system",
-        "content_regex": "(?<=</example>)[\\s\\S]*?(?=</outputFormatting>)"
+        "content_regex": "(?<=</example>)\\n[\\s\\S]{150,}?(?=</outputFormatting>)"
       },
       "then": {
         "action": "sub",

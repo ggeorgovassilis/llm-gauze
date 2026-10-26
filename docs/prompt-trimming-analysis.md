@@ -174,13 +174,15 @@ Patterns:
 | Rule id | Structural pattern | What it does |
 | --- | --- | --- |
 | `replace-identity-policy` | `\A(?:[^\n]*\n){7}(?=<instructions>)` | Replaces exactly the seven-line identity/policy prefix before the first instructions block. |
-| `compact-output-formatting-tail` | `(?<=</example>)[\s\S]*?(?=</outputFormatting>)` | Replaces the verbose formatting tail after the example; leaves the Markdown instruction before the example intact. |
+| `compact-output-formatting-tail` | `(?<=</example>)\n[\s\S]{150,}?(?=</outputFormatting>)` | Replaces the verbose formatting tail after the example; leaves the Markdown instruction before the example intact. |
 | `discard-output-formatting-example` | `<example>[\s\S]*?</example>\n?` | Removes the illustrative example block. |
 
 Rule order matters: the formatting-tail rule runs before the example is removed.
-After that removal its look-behind no longer matches, so a second application is
-a no-op. The identity rule's seven-line anchor no longer matches after it has
-been rewritten. The example rule has nothing left to match. The script reports
+After that removal its look-behind no longer matches. The tail rule also has a
+150-character floor, so its 94-character replacement cannot re-match it. The
+identity rule's seven-line anchor no longer matches after it has been rewritten,
+and the example rule has nothing left to match. Each rule is therefore a no-op
+on its own output, as well as on the full set. The script reports
 `idempotent: true` and `non_idempotent_requests: 0`; the test suite checks the
 same property against the synthetic fixture.
 

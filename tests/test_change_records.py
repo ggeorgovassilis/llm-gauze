@@ -43,23 +43,33 @@ def _documented_change_keys() -> dict[str, set[str]]:
 
 
 def _kinds_in_source(source: str) -> set[str]:
-    """Kinds literal-emitted as a ``"kind"`` dict value in ``source``.
+    """Kinds literal-emitted in ``source`` as a ``"kind"`` value.
 
-    The source is parsed rather than regex-scanned so a kind named only in a
-    comment or docstring cannot satisfy the documented-kind guard.
+    Both ``{"kind": "x"}`` dict literals and ``dict(kind="x")`` calls are
+    recognised. The source is parsed rather than regex-scanned so a kind named
+    only in a comment or docstring cannot satisfy the documented-kind guard.
+    A kind built dynamically (held in a variable or computed at runtime) is not
+    visible to this scan.
     """
     kinds: set[str] = set()
     for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.Dict):
-            continue
-        for key, value in zip(node.keys, node.values):
-            if (
-                isinstance(key, ast.Constant)
-                and key.value == "kind"
-                and isinstance(value, ast.Constant)
-                and isinstance(value.value, str)
-            ):
-                kinds.add(value.value)
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == "kind"
+                    and isinstance(value, ast.Constant)
+                    and isinstance(value.value, str)
+                ):
+                    kinds.add(value.value)
+        elif isinstance(node, ast.Call):
+            for keyword in node.keywords:
+                if (
+                    keyword.arg == "kind"
+                    and isinstance(keyword.value, ast.Constant)
+                    and isinstance(keyword.value.value, str)
+                ):
+                    kinds.add(keyword.value.value)
     return kinds
 
 
@@ -82,9 +92,10 @@ def _assert_documented(changes: list[dict]) -> None:
         assert kind in documented, f"undocumented change kind: {kind}"
         required = {"kind", *documented[kind]}
         allowed = required | GENERIC_CHANGE_KEYS
-        assert required <= set(change) <= allowed, (
-            f"{kind} emitted {sorted(change)}, documented {sorted(allowed)}"
-        )
+        missing = required - set(change)
+        extra = set(change) - allowed
+        assert not missing, f"{kind} missing documented keys: {sorted(missing)}"
+        assert not extra, f"{kind} emitted undocumented keys: {sorted(extra)}"
 
 
 def test_documented_kinds_cover_every_emitter():
@@ -94,6 +105,17 @@ def test_documented_kinds_cover_every_emitter():
 def test_kind_source_scan_handles_quote_styles_and_digits():
     source = """records = [{"kind": "tool_overflow"}, {'kind': 'think2'}]"""
     assert _kinds_in_source(source) == {"tool_overflow", "think2"}
+
+
+def test_kind_source_scan_handles_dict_constructor():
+    source = 'record = dict(kind="flagged_malformed", reason="missing_name")'
+    assert _kinds_in_source(source) == {"flagged_malformed"}
+
+
+def test_kind_source_scan_cannot_resolve_variable_kinds():
+    # Documented limitation: the scan only sees literal kind values.
+    source = 'kind = "tool_overflow"\nrecord = {"kind": kind}'
+    assert _kinds_in_source(source) == set()
 
 
 def test_kind_source_scan_ignores_comments_and_docstrings():
@@ -107,13 +129,13 @@ records = [{"kind": "tool_overflow"}]
 
 
 def test_assert_documented_rejects_undocumented_key():
-    with pytest.raises(AssertionError, match="documented"):
+    with pytest.raises(AssertionError, match=r"undocumented keys: \['chars'\]"):
         _assert_documented([{"kind": "repaired_arguments", "chars": 1}])
 
 
 def test_assert_documented_rejects_missing_kind_specific_key():
     # `tool_overflow` also requires `truncated`, so `size` alone is not enough.
-    with pytest.raises(AssertionError, match="documented"):
+    with pytest.raises(AssertionError, match=r"missing documented keys: \['truncated'\]"):
         _assert_documented([{"kind": "tool_overflow", "size": 5}])
 
 

@@ -64,12 +64,18 @@ def test_main_builds_taxonomy_and_stable_prefix_from_synthetic_records(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    # Same history size, different final character: two conversations exercise
+    # per-session pairing while keeping the history-size variants at one.
+    altered = json.loads(json.dumps(copilot_body))
+    altered["messages"][-1]["content"] = altered["messages"][-1]["content"][:-1] + "]"
     _write_corpus(
         tmp_path,
         {
             "records-20260101-000000.jsonl": [
                 make_record("r1", copilot_body, session="session-a", timestamp=1.0),
                 make_record("r2", copilot_body, session="session-a", timestamp=2.0),
+                make_record("r3", altered, session="session-b", timestamp=1.0),
+                make_record("r4", altered, session="session-b", timestamp=2.0),
             ]
         },
     )
@@ -84,10 +90,17 @@ def test_main_builds_taxonomy_and_stable_prefix_from_synthetic_records(
     assert history["variants"] == 1
     assert history["dominant_share"] == 1.0
 
+    concat = analysis.content_concat(copilot_body)
+    altered_concat = analysis.content_concat(altered)
     stable = report["stable_prefix_before"]
-    assert stable["consecutive_pairs"] == 1
-    assert stable["sessions"] == 1
-    assert stable["global_common_prefix_chars"] == len(analysis.content_concat(copilot_body))
+    # One consecutive pair per session; pairing across sessions would report 3.
+    assert stable["consecutive_pairs"] == 2
+    assert stable["sessions"] == 2
+    assert stable["median"] == len(concat)
+    assert stable["global_common_prefix_chars"] == analysis.shared_prefix_length(
+        concat, altered_concat
+    )
+    assert stable["global_common_prefix_chars"] == len(concat) - 1
 
 
 def test_taxonomy_variants_ignore_session_scoped_identifiers(

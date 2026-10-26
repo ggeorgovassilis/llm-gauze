@@ -67,15 +67,17 @@ five files, each with at least one turn. The script reports this as
 `corpus.sample_floor` with `minimum_requests`, `minimum_files` and
 `minimum_turns_per_file`; `met` is true only when all three hold.
 
-| File | Bytes | SHA-256 | Records | Requests / turns | Conversations |
-| --- | ---: | --- | ---: | ---: | ---: |
-| `records-20261021-175741.jsonl` | 27,120,149 | `c74639e82990481d4792b8cbf10f71022cf1d99d20bf01f74d91c2c7e3997cd4` | 1,292 | 1,198 | 5 |
-| `records-20261022-040049.jsonl` | 3,377,922 | `dbe5be0675e388328934bbd6302a9387f68ccf59ff134eea8c303ccec6812cd7` | 175 | 165 | 4 |
-| `records-20261023-095318.jsonl` | 13,242,367 | `f8e6731ff13cf69b8a776b3fd8e438c279115d55d23b371a5b6ff6b3f5ca1969` | 715 | 709 | 2 |
-| `records-20261026-042400.jsonl` | 463,737 | `bf4c4006d8ecfa4e3a0d8e08d5505d4568f961e868ef86ff8d7a07f5e4bbaace` | 5 | 1 | 1 |
-| `records-20261026-051313.jsonl` | 1,067,201 | `18fa07ad247da0e1d4711e9a06f82989fb3bd8a0ade0ee3a8effabd2c70c866d` | 11 | 11 | 1 |
-| **Total** | **45,271,376** | | **2,198** | **2,084** | **13** |
+| File | Bytes | SHA-256 | Records | Requests | Turns | Conversations |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| `records-20261021-175741.jsonl` | 27,120,149 | `c74639e82990481d4792b8cbf10f71022cf1d99d20bf01f74d91c2c7e3997cd4` | 1,292 | 1,198 | 1,198 | 5 |
+| `records-20261022-040049.jsonl` | 3,377,922 | `dbe5be0675e388328934bbd6302a9387f68ccf59ff134eea8c303ccec6812cd7` | 175 | 165 | 165 | 4 |
+| `records-20261023-095318.jsonl` | 13,242,367 | `f8e6731ff13cf69b8a776b3fd8e438c279115d55d23b371a5b6ff6b3f5ca1969` | 715 | 709 | 709 | 2 |
+| `records-20261026-042400.jsonl` | 463,737 | `bf4c4006d8ecfa4e3a0d8e08d5505d4568f961e868ef86ff8d7a07f5e4bbaace` | 5 | 1 | 1 | 1 |
+| `records-20261026-051313.jsonl` | 1,067,201 | `18fa07ad247da0e1d4711e9a06f82989fb3bd8a0ade0ee3a8effabd2c70c866d` | 11 | 11 | 11 | 1 |
+| **Total** | **45,271,376** | | **2,198** | **2,084** | **2,084** | **13** |
 
+Requests and turns coincide in this corpus: every unique request contains at
+least one `user` message, so `requests` and `turns` are equal per file.
 `data/records.jsonl` was excluded as the live file specified in the ticket.
 `corrupt_lines` is zero for every file.
 
@@ -278,15 +280,18 @@ the #153 dry-run and an A/B run before shipping.
 1. **Reproduce the aggregates.** Run
    `./scripts/analyse-prompt-preambles --data-dir data` and compare the manifest
    hashes and counts with the table above. The script is read-only.
-2. **Validate the rule set.** Run the full `./scripts/test.sh`. To run only the
-   new file without the coverage floor, add `--no-cov`:
-   `./scripts/test.sh tests/test_prompt_rules_example.py --no-cov`. The tests
-   load the analysis script, so they exercise its rule engine, validator and
-   corpus reader: schema, unique ids, system-only roles (including text that
-   would match in a user message), a match for every rule on the synthetic
-   fixture, per-rule and full-set idempotence, preservation of the tool-linked
-   blocks, a bounded saving, live-file exclusion, a clean empty-corpus report
-   and that no prompt text reaches stdout.
+2. **Validate the rule set and aggregate maths.** Run the full
+   `./scripts/test.sh`. To run only the new files without the coverage floor,
+   add `--no-cov`:
+   `./scripts/test.sh tests/test_prompt_rules_example.py tests/test_analyse_prompt_preambles.py --no-cov`.
+   The tests load the analysis script, so they exercise its rule engine,
+   validator and corpus reader: schema, unique ids, system-only roles (including
+   text that would match in a user message), a match for every rule on the
+   synthetic fixture, per-rule and full-set idempotence, preservation of the
+   tool-linked blocks, a bounded saving, live-file exclusion, a clean
+   empty-corpus report and that no prompt text reaches stdout. The aggregate
+   tests pin the percentile, shared-prefix, taxonomy, sample-floor and saving
+   calculations behind the published figures.
 3. **Load it through #153.** `PROMPT_TRIM_ENABLED=true` with the example file;
    confirm validation succeeds. An invalid or unreadable file must log `ERROR`
    once and disable trimming while requests are still served.

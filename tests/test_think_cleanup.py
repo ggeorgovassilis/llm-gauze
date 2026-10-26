@@ -30,10 +30,18 @@ def _guard(tags=_DEFAULT_TAGS, placeholder=_PLACEHOLDER):
 def test_relocates_and_keeps_visible_answer():
     # A think block followed by real content: the block is relocated, the
     # visible answer stays put, no placeholder is needed.
-    content, reasoning, changes = _guard().clean("<think>scratch</think> the real answer")
+    raw = "<think>scratch</think> the real answer"
+    content, reasoning, changes = _guard().clean(raw)
     assert content == " the real answer", repr(content)
     assert reasoning == "scratch", repr(reasoning)
-    assert changes == [{"kind": "relocated_think", "chars": 7, "blocks": 1}], changes
+    assert changes == [
+        {
+            "kind": "relocated_think",
+            "chars_before": len(raw),
+            "chars_after": len(" the real answer"),
+            "blocks": 1,
+        }
+    ], changes
 
 
 def test_relocates_unmatched_opening_tag():
@@ -129,19 +137,35 @@ def test_tool_call_turn_still_relocates_leaked_tag():
             "function": {"name": "get_weather", "arguments": "{}"},
         }
     ]
-    content, reasoning, changes = _guard().clean("<think>which tool</think>", "", tool_calls)
+    raw = "<think>which tool</think>"
+    content, reasoning, changes = _guard().clean(raw, "", tool_calls)
     assert content == "", repr(content)
     assert reasoning == "which tool", repr(reasoning)
-    assert changes == [{"kind": "relocated_think", "chars": 10, "blocks": 1}], changes
+    assert changes == [
+        {
+            "kind": "relocated_think",
+            "chars_before": len(raw),
+            "chars_after": 0,
+            "blocks": 1,
+        }
+    ], changes
 
 
 def test_relocate_does_not_apply_placeholder():
     # The extraction rung needs the relocated turn *before* the placeholder
     # floor, so `relocate` must leave empty content empty.
-    content, reasoning, changes = _guard().relocate("<think>x</think>")
+    raw = "<think>x</think>"
+    content, reasoning, changes = _guard().relocate(raw)
     assert content == "", repr(content)
     assert reasoning == "x", repr(reasoning)
-    assert changes == [{"kind": "relocated_think", "chars": 1, "blocks": 1}], changes
+    assert changes == [
+        {
+            "kind": "relocated_think",
+            "chars_before": len(raw),
+            "chars_after": 0,
+            "blocks": 1,
+        }
+    ], changes
 
 
 def test_guard_empty_apply_placeholder():

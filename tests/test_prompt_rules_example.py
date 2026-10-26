@@ -13,18 +13,13 @@ so these tests exercise the delivered implementation instead of a copy of it.
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-RULES_PATH = ROOT / "config" / "prompt_rules.example.json"
-SCRIPT_PATH = ROOT / "scripts" / "analyse-prompt-preambles"
-FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "copilot_request_body.json"
+RULES_PATH = Path(__file__).resolve().parents[1] / "config" / "prompt_rules.example.json"
 
 _KEPT_SYSTEM_BLOCKS = (
     "<instructions>",
@@ -42,41 +37,14 @@ _KEPT_SYSTEM_BLOCKS = (
 )
 
 
-def _load_analysis() -> Any:
-    """Import the extensionless analysis script as a module."""
-    loader = SourceFileLoader("analyse_prompt_preambles", str(SCRIPT_PATH))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    return module
-
-
-analysis = _load_analysis()
-
-
-def _fixture() -> dict[str, Any]:
-    return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
-
-
 @pytest.fixture(scope="module")
 def rules() -> list[dict[str, Any]]:
     document = json.loads(RULES_PATH.read_text(encoding="utf-8"))
     return document["rules"]
 
 
-def _record(request_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    response = {"choices": [{"message": {"role": "assistant", "content": "done"}}]}
-    return {
-        "request_id": request_id,
-        "timestamp": 1.0,
-        "request_headers": {"x-interaction-id": "session-1"},
-        "request_body": json.dumps(body),
-        "response_body": json.dumps(response),
-    }
-
-
 def test_prompt_rules_example_passes_the_analysis_validator(
+    analysis: Any,
     rules: list[dict[str, Any]],
 ) -> None:
     document = json.loads(RULES_PATH.read_text(encoding="utf-8"))
@@ -102,9 +70,10 @@ def test_prompt_rules_example_targets_system_messages_only(
 
 
 def test_rules_ignore_matching_text_in_non_system_messages(
+    analysis: Any,
+    copilot_body: dict[str, Any],
     rules: list[dict[str, Any]],
 ) -> None:
-    body = _fixture()
     hostile = (
         "one\ntwo\nthree\nfour\nfive\nsix\nseven\n"
         "<instructions>not system</instructions>\n"
@@ -112,19 +81,18 @@ def test_rules_ignore_matching_text_in_non_system_messages(
         + "Use fenced code blocks\n" * 8
         + "</outputFormatting>"
     )
-    body["messages"].append({"role": "user", "content": hostile})
+    copilot_body["messages"].append({"role": "user", "content": hostile})
 
-    transformed, changes = analysis.apply_rules(body, rules)
+    transformed, changes = analysis.apply_rules(copilot_body, rules)
 
     assert transformed["messages"][-1]["content"] == hostile
     assert {change["role"] for change in changes} == {"system"}
 
 
-def test_fixture_is_copilot_shaped() -> None:
-    body = _fixture()
-    assert {"messages", "model", "stream", "tools"} <= set(body)
-    assert body["messages"][0]["role"] == "system"
-    system = body["messages"][0]["content"]
+def test_fixture_is_copilot_shaped(copilot_body: dict[str, Any]) -> None:
+    assert {"messages", "model", "stream", "tools"} <= set(copilot_body)
+    assert copilot_body["messages"][0]["role"] == "system"
+    system = copilot_body["messages"][0]["content"]
     for tag in (
         "<instructions>",
         "<toolUseInstructions>",
@@ -137,18 +105,23 @@ def test_fixture_is_copilot_shaped() -> None:
 
 
 def test_every_rule_matches_exactly_the_system_message(
+    analysis: Any,
+    copilot_body: dict[str, Any],
     rules: list[dict[str, Any]],
 ) -> None:
-    body = _fixture()
     for rule in rules:
-        matched = [message for message in body["messages"] if analysis.rule_matches(rule, message)]
+        matched = [
+            message for message in copilot_body["messages"] if analysis.rule_matches(rule, message)
+        ]
         assert [message["role"] for message in matched] == ["system"], rule["id"]
 
 
 def test_rules_trim_only_identity_and_output_formatting_example(
+    analysis: Any,
+    copilot_body: dict[str, Any],
     rules: list[dict[str, Any]],
 ) -> None:
-    body = _fixture()
+    body = copilot_body
     original = body["messages"][0]["content"]
 
     transformed, changes = analysis.apply_rules(body, rules)
@@ -176,35 +149,48 @@ def test_rules_trim_only_identity_and_output_formatting_example(
     assert {change["rule"] for change in changes} == {rule["id"] for rule in rules}
 
 
-def test_each_rule_is_a_no_op_on_its_own_output(rules: list[dict[str, Any]]) -> None:
+def test_each_rule_is_a_no_op_on_its_own_output(
+    analysis: Any,
+    copilot_body: dict[str, Any],
+    rules: list[dict[str, Any]],
+) -> None:
     for rule in rules:
-        once, _ = analysis.apply_rules(_fixture(), [rule])
+        once, _ = analysis.apply_rules(copilot_body, [rule])
         twice, changes = analysis.apply_rules(once, [rule])
         assert twice == once, rule["id"]
         assert changes == [], rule["id"]
 
 
-def test_the_full_rule_set_is_idempotent(rules: list[dict[str, Any]]) -> None:
-    once, _ = analysis.apply_rules(_fixture(), rules)
+def test_the_full_rule_set_is_idempotent(
+    analysis: Any,
+    copilot_body: dict[str, Any],
+    rules: list[dict[str, Any]],
+) -> None:
+    once, _ = analysis.apply_rules(copilot_body, rules)
     twice, changes = analysis.apply_rules(once, rules)
     assert twice == once
     assert changes == []
 
 
-def test_load_corpus_excludes_the_live_records_file(tmp_path: Path) -> None:
+def test_load_corpus_excludes_the_live_records_file(
+    analysis: Any,
+    copilot_body: dict[str, Any],
+    make_record: Any,
+    tmp_path: Path,
+) -> None:
     raw = (
         "\n".join(
             [
-                json.dumps(_record("r1", _fixture())),
+                json.dumps(make_record("r1", copilot_body)),
                 "{not json",
-                json.dumps(_record("r2", _fixture())),
+                json.dumps(make_record("r2", copilot_body)),
             ]
         ).encode()
         + b"\n"
     )
     (tmp_path / "records-20260101-000000.jsonl").write_bytes(raw)
     (tmp_path / "records.jsonl").write_text(
-        json.dumps(_record("live", _fixture())), encoding="utf-8"
+        json.dumps(make_record("live", copilot_body)), encoding="utf-8"
     )
 
     records, manifest = analysis.load_corpus(tmp_path)
@@ -219,10 +205,14 @@ def test_load_corpus_excludes_the_live_records_file(tmp_path: Path) -> None:
 
 
 def test_main_reports_evidence_without_prompt_text(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    analysis: Any,
+    copilot_body: dict[str, Any],
+    make_record: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     (tmp_path / "records-20260101-000000.jsonl").write_text(
-        json.dumps(_record("r1", _fixture())) + "\n", encoding="utf-8"
+        json.dumps(make_record("r1", copilot_body)) + "\n", encoding="utf-8"
     )
 
     assert analysis.main(["--data-dir", str(tmp_path), "--rules", str(RULES_PATH)]) == 0
@@ -239,7 +229,9 @@ def test_main_reports_evidence_without_prompt_text(
 
 
 def test_main_reports_an_empty_corpus_without_crashing(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    analysis: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     assert analysis.main(["--data-dir", str(tmp_path), "--rules", str(RULES_PATH)]) == 0
     report = json.loads(capsys.readouterr().out)

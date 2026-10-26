@@ -320,7 +320,12 @@ script already emits every metric the thresholds compare.
 ### Baseline
 
 Measured in #152 on the corpus above (2,084 requests, five dated files, 13
-conversations) with `config/prompt_rules.example.json`:
+conversations) with `config/prompt_rules.example.json`. The corpus was captured
+with prompt trimming off (`PROMPT_TRIM_ENABLED=false`, the default; #152
+predates #153). That matters because the record holds the forwarded
+`request_body`, which is post-trim whenever trimming is on, so these baselines
+describe the client's text before any rule ran. A re-validation corpus must be
+captured under the same condition (step 1) or it is not comparable.
 
 | Rule id | Baseline match rate | Baseline median saved / match |
 | --- | ---: | ---: |
@@ -366,9 +371,16 @@ instead of treating the result as drift.
    Point `DATA_DIR` at a new, empty directory for this run (in the container
    `/data/revalidation-2026-10`, which maps to the host's
    `data/revalidation-2026-10`; keep `RECORD_FILE=records.jsonl`) and run the
-   gateway with `RECORDING_ENABLED=true`. Do not reuse `data/`: it still
-   holds the five baseline `records-*.jsonl` files, and the script reads every
-   matching file in the supplied directory, so fresh traffic would be
+   gateway with `RECORDING_ENABLED=true`. Keep prompt trimming off for the
+   capture: leave `PROMPT_TRIM_ENABLED=false` (the default), or set
+   `PROMPT_TRIM_DRY_RUN=true`, which records the would-be changes but forwards
+   the original body. Do not capture with `PROMPT_TRIM_ENABLED=true` and
+   `PROMPT_TRIM_DRY_RUN=false`: every record then holds an already-trimmed
+   body, the analysis applies the rules to their own output, and the idempotent
+   rules match nothing, so nearly every rule reports 0% — a false regression
+   that is not drift. Do not reuse `data/`: it
+   still holds the five baseline `records-*.jsonl` files, and the script reads
+   every matching file in the supplied directory, so fresh traffic would be
    aggregated with the baseline and a rule that stopped matching could never
    cross the thresholds. Confirm the directory contains no `records-*.jsonl`
    before starting. Use VS Code/Copilot normally against the gateway; a restart
@@ -383,7 +395,22 @@ instead of treating the result as drift.
    captured; `corpus.data_dir` echoes the directory that was read. Note the
    file hashes so the run is reproducible. A corpus below the floor, or one
    that includes baseline files, is not comparable.
-3. **Run the committed analysis command** against the isolated directory (the
+3. **Confirm the capture was untrimmed.** Before trusting any match rate, check
+   a chat-completion record and verify that its system `request_body` still
+   carries the blocks the rules target: the identity/policy prefix before
+   `<instructions>` and the `<example>` block. Counting marker occurrences
+   keeps prompt text off the terminal and out of the report:
+
+   ```bash
+   jq -r '.request_body | fromjson? | .messages[]? | select(.role == "system") | .content' \
+     data/revalidation-2026-10/records-*.jsonl | grep -c '<example>'
+   ```
+
+   A count near zero means the corpus was captured with trimming on: discard it
+   and recapture. Do not infer the capture condition from `prompt_trim` entries
+   — they record rule applications, not whether the forwarded body was
+   trimmed, and dry-run also writes them.
+4. **Run the committed analysis command** against the isolated directory (the
    same script and committed example rules as #152):
 
    ```bash
@@ -395,20 +422,20 @@ instead of treating the result as drift.
    `records.jsonl`), prints aggregates only and never emits prompt text. Use
    `--rules` only to check a different deployed rule file, and say so in the
    result, because the baselines above are for the committed example set.
-4. **Compare per-rule results.** For each entry in `rules`, read `match_rate`
+5. **Compare per-rule results.** For each entry in `rules`, read `match_rate`
    and `median_chars_saved_per_matched_request` and check them against the
    threshold table. Check `matched_requests` too when the corpus size changed.
-5. **Compare the aggregate saving.** In `saving`, read
+6. **Compare the aggregate saving.** In `saving`, read
    `content_chars_saved.median`, `share_of_request_body.median` and
    `share_of_message_content.median`. The p95 values are informative but are
    not thresholds.
-6. **Act on a crossed threshold.** File a new follow-up ticket to update or
+7. **Act on a crossed threshold.** File a new follow-up ticket to update or
    retire the stale rule. Include the rule id, baseline versus observed match
    rate and saving, the command, the gateway commit and the corpus manifest
    (file hashes and counts); include no prompt text. Do not edit the rule or
    this baseline silently: the follow-up ticket owns the fix and the refreshed
    baseline. Retire a rule outright when the client no longer emits the block.
-7. **Record a clean run.** If no threshold is crossed, note the date, gateway
+8. **Record a clean run.** If no threshold is crossed, note the date, gateway
    commit, corpus manifest and outcome (for example as a comment on the
    re-validation ticket). No rule or baseline change is needed.
 

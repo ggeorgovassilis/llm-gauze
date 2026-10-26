@@ -3,8 +3,8 @@
 The unit tests pin the four actions, match keys, ordering/terminals,
 composition, every safety invariant, determinism and the scan bound. The
 validation tests prove an invalid file logs one ``ERROR`` and disables
-trimming while requests are still served. End-to-end proxy behaviour lives in
-``test_prompt_trim_integration.py``.
+trimming. That requests are still served in that state, and every end-to-end
+proxy behaviour, are asserted in ``test_prompt_trim_integration.py``.
 
 All prompt text here is synthetic — never recorded conversation content.
 """
@@ -18,26 +18,17 @@ from pathlib import Path
 
 import pytest
 from app.remediation.prompt_trim import PromptTrimTransform, validate_rules
+from conftest import rules_document, write_rules
 from mock_upstream import settings_override
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_RULES = REPO_ROOT / "config" / "prompt_rules.example.json"
 
 
-def _document(rules):
-    return {"version": 1, "rules": rules}
-
-
 def _transform(rules, **kwargs):
-    compiled, errors = validate_rules(_document(rules), kwargs.get("marker", "... [trimmed]"))
+    compiled, errors = validate_rules(rules_document(rules), kwargs.get("marker", "... [trimmed]"))
     assert errors == [], errors
     return PromptTrimTransform(compiled, **kwargs)
-
-
-def _write_rules(tmp_path, rules):
-    path = tmp_path / "prompt_rules.json"
-    path.write_text(json.dumps(_document(rules)), encoding="utf-8")
-    return path
 
 
 def _body(*messages, **extra):
@@ -664,23 +655,25 @@ def _valid_rule(**overrides):
         {"version": 2, "rules": []},
         {"version": 1, "rules": "not a list"},
         {"version": 1, "rules": ["not an object"]},
-        _document([_valid_rule(id="")]),
-        _document([_valid_rule(id="same"), _valid_rule(id="same")]),
-        _document([_valid_rule(then={"action": "unknown"})]),
-        _document([_valid_rule(when={"role": "system", "content_regex": "("})]),
-        _document([_valid_rule(when={"role": 1, "content_regex": "x"})]),
-        _document([_valid_rule(when={"role": ["system", 1], "content_regex": "x"})]),
-        _document([_valid_rule(when={"role": "system", "content_regex": "x", "min_chars": -1})]),
-        _document([_valid_rule(then={"action": "replace"})]),
-        _document([_valid_rule(then={"action": "sub"})]),
-        _document([_valid_rule(then={"action": "truncate"})]),
-        _document([_valid_rule(then={"action": "truncate", "chars": True})]),
-        _document([{"id": "no-when", "then": {"action": "drop"}}]),
-        _document([{"id": "no-then", "when": {"content_regex": "x"}}]),
-        _document([_valid_rule(when={"role": "system", "content_regex": 1})]),
-        _document([_valid_rule(then={"action": "truncate", "chars": -1})]),
+        rules_document([_valid_rule(id="")]),
+        rules_document([_valid_rule(id="same"), _valid_rule(id="same")]),
+        rules_document([_valid_rule(then={"action": "unknown"})]),
+        rules_document([_valid_rule(when={"role": "system", "content_regex": "("})]),
+        rules_document([_valid_rule(when={"role": 1, "content_regex": "x"})]),
+        rules_document([_valid_rule(when={"role": ["system", 1], "content_regex": "x"})]),
+        rules_document(
+            [_valid_rule(when={"role": "system", "content_regex": "x", "min_chars": -1})]
+        ),
+        rules_document([_valid_rule(then={"action": "replace"})]),
+        rules_document([_valid_rule(then={"action": "sub"})]),
+        rules_document([_valid_rule(then={"action": "truncate"})]),
+        rules_document([_valid_rule(then={"action": "truncate", "chars": True})]),
+        rules_document([{"id": "no-when", "then": {"action": "drop"}}]),
+        rules_document([{"id": "no-then", "when": {"content_regex": "x"}}]),
+        rules_document([_valid_rule(when={"role": "system", "content_regex": 1})]),
+        rules_document([_valid_rule(then={"action": "truncate", "chars": -1})]),
         # A rule whose own output still matches its when condition.
-        _document(
+        rules_document(
             [
                 _valid_rule(
                     when={"role": "system", "content_regex": "foo"},
@@ -688,7 +681,7 @@ def _valid_rule(**overrides):
                 )
             ]
         ),
-        _document(
+        rules_document(
             [
                 _valid_rule(
                     when={"role": "system", "content_regex": "foo"},
@@ -706,7 +699,7 @@ def test_invalid_documents_are_rejected(document):
 def test_non_idempotent_rule_without_a_witness_is_rejected():
     # ``(foo)\1`` has a backreference, so no witness can be generated and the
     # replacement-text fallback must catch the non-idempotent output.
-    document = _document(
+    document = rules_document(
         [
             _valid_rule(
                 when={"role": "system", "content_regex": r"(foo)\1"},
@@ -731,7 +724,7 @@ def test_witness_generation_guards_the_private_re_parser_dependency():
 
     # The replacement text alone does not match the lookbehind pattern, so
     # only the generated witness can prove the ``sub`` loops.
-    document = _document(
+    document = rules_document(
         [
             _valid_rule(
                 when={"role": "system", "content_regex": r"(?<=x)y"},
@@ -745,7 +738,7 @@ def test_witness_generation_guards_the_private_re_parser_dependency():
 
 
 def test_witnessless_rule_with_a_safe_replacement_is_accepted():
-    document = _document(
+    document = rules_document(
         [
             _valid_rule(
                 when={"role": "system", "content_regex": r"(foo)\1"},
@@ -759,7 +752,7 @@ def test_witnessless_rule_with_a_safe_replacement_is_accepted():
 
 
 def test_valid_document_compiles_all_actions():
-    document = _document(
+    document = rules_document(
         [
             _valid_rule(
                 id="drop",
@@ -824,19 +817,14 @@ def test_from_settings_rejects_malformed_json(tmp_path, caplog):
 
 
 def test_from_settings_loads_a_valid_file(tmp_path):
-    path = tmp_path / "rules.json"
-    path.write_text(
-        json.dumps(
-            _document(
-                [
-                    _valid_rule(
-                        when={"role": "system", "content_regex": "foo"},
-                        then={"action": "replace", "content": "bar"},
-                    )
-                ]
+    path = write_rules(
+        tmp_path,
+        [
+            _valid_rule(
+                when={"role": "system", "content_regex": "foo"},
+                then={"action": "replace", "content": "bar"},
             )
-        ),
-        encoding="utf-8",
+        ],
     )
     with settings_override(
         prompt_trim_enabled=True,
@@ -860,7 +848,7 @@ def test_from_settings_accepts_and_applies_a_preamble_cap_rule(tmp_path):
     ``truncate`` converges in one step, so it is idempotent; the loader must
     not reject it.
     """
-    path = _write_rules(
+    path = write_rules(
         tmp_path,
         [
             {

@@ -577,7 +577,8 @@ rewriting prompt text changes model behaviour and is a quality risk.
   matched and count as `scan_bound` skips). This bounds, but does not
   eliminate, the residual ReDoS risk — rule regexes must avoid catastrophic
   backtracking. `PROMPT_TRIM_TRUNCATE_MARKER` is counted within a `truncate`
-  rule's `chars` bound.
+  rule's `chars` bound; a message that already fits within the bound is left
+  unchanged and no change record is written (a trim never grows a message).
 - Records carry a `prompt_trim` list of `prompt_trim` changes (or `null`);
   telemetry counts `prompt_trim_rules_total{rule,action,mode}` and
   `prompt_trim_skipped_total{reason}`. Each application logs one `DEBUG` line

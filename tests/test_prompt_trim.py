@@ -75,6 +75,15 @@ def _contents(body):
     return [message.get("content") for message in body["messages"]]
 
 
+def _raw_body(payload):
+    """Serialise with non-default pretty whitespace.
+
+    A re-serialisation regression (``json.dumps`` on a reparsed body) produces
+    different bytes, so byte-identity assertions built on this are meaningful.
+    """
+    return (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+
+
 # --- actions and matching ---------------------------------------------
 
 
@@ -192,6 +201,28 @@ def test_truncate_marker_longer_than_chars_stays_within_bound():
     )
     out, _ = transform.apply(_body({"role": "system", "content": "abcdef"}))
     assert out["messages"][0]["content"] == "..."
+
+
+@pytest.mark.parametrize("content", ["abc", "a" * 100])
+def test_truncate_never_grows_content_that_already_fits(content):
+    # The rule is idempotent for its shortest witness (200 chars), but a
+    # message inside the bound must be left byte-identical and unrecorded.
+    transform = _transform(
+        [
+            {
+                "id": "bounded",
+                "when": {"role": "system", "content_regex": r"^a{200}$|^a{100}$|^abc$"},
+                "then": {"action": "truncate", "chars": 100},
+            }
+        ],
+        marker="... [trimmed]",
+    )
+    body = _body({"role": "system", "content": content})
+    out, changes = transform.apply(body)
+
+    assert out is body
+    assert changes == []
+    assert out["messages"][0]["content"] == content
 
 
 def test_rules_compose_in_file_order():
@@ -690,6 +721,36 @@ def test_invalid_documents_are_rejected(document):
     assert errors, document
 
 
+def test_non_idempotent_rule_without_a_witness_is_rejected():
+    # ``(foo)\1`` has a backreference, so no witness can be generated and the
+    # replacement-text fallback must catch the non-idempotent output.
+    document = _document(
+        [
+            _valid_rule(
+                when={"role": "system", "content_regex": r"(foo)\1"},
+                then={"action": "sub", "replacement": "foofoo"},
+            )
+        ]
+    )
+    rules, errors = validate_rules(document)
+    assert rules == []
+    assert any("not idempotent" in error for error in errors)
+
+
+def test_witnessless_rule_with_a_safe_replacement_is_accepted():
+    document = _document(
+        [
+            _valid_rule(
+                when={"role": "system", "content_regex": r"(foo)\1"},
+                then={"action": "sub", "replacement": "bar"},
+            )
+        ]
+    )
+    rules, errors = validate_rules(document)
+    assert errors == []
+    assert [rule.id for rule in rules] == ["rule"]
+
+
 def test_valid_document_compiles_all_actions():
     document = _document(
         [
@@ -774,22 +835,19 @@ def test_from_settings_loads_a_valid_file(tmp_path):
         prompt_trim_enabled=True,
         prompt_trim_rules_file=str(path),
         prompt_trim_truncate_marker="...",
+        prompt_trim_dry_run=True,
+        prompt_trim_max_scan_chars=1234,
     ):
         transform = PromptTrimTransform.from_settings()
     assert transform.enabled is True
     assert transform.disabled_reason is None
+    assert transform.dry_run is True
+    assert transform.max_scan_chars == 1234
+    assert transform.marker == "..."
     assert [rule.id for rule in transform.rules] == ["rule"]
 
 
 # --- determinism and the shipped rule set ------------------------------
-
-
-def _fixture_body():
-    return json.loads(
-        (Path(__file__).resolve().parent / "fixtures" / "copilot_request_body.json").read_text(
-            encoding="utf-8"
-        )
-    )
 
 
 def _example_transform():
@@ -799,8 +857,8 @@ def _example_transform():
     return PromptTrimTransform(rules)
 
 
-def test_two_runs_are_byte_identical_and_hash_the_same():
-    body = _fixture_body()
+def test_two_runs_are_byte_identical_and_hash_the_same(copilot_body):
+    body = copilot_body
     first, first_changes = _example_transform().apply(copy.deepcopy(body))
     second, second_changes = _example_transform().apply(copy.deepcopy(body))
 
@@ -811,8 +869,8 @@ def test_two_runs_are_byte_identical_and_hash_the_same():
     assert first_changes == second_changes
 
 
-def test_trimmed_prefix_is_stable_across_turns():
-    body = _fixture_body()
+def test_trimmed_prefix_is_stable_across_turns(copilot_body):
+    body = copilot_body
     transform = _example_transform()
     first, _ = transform.apply(copy.deepcopy(body))
 
@@ -824,8 +882,8 @@ def test_trimmed_prefix_is_stable_across_turns():
     assert first["messages"][0]["content"] == second["messages"][0]["content"]
 
 
-def test_example_rules_are_idempotent_and_keep_tools_and_latest_request():
-    body = _fixture_body()
+def test_example_rules_are_idempotent_and_keep_tools_and_latest_request(copilot_body):
+    body = copilot_body
     original = copy.deepcopy(body)
     transform = _example_transform()
 
@@ -850,7 +908,7 @@ def _write_rules(tmp_path, rules):
     return path
 
 
-def _run_forward(tmp_path, body, *, rules_path=None, extra_settings=None):
+def _run_forward(tmp_path, body, *, read_records, rules_path=None, extra_settings=None):
     settings_values = {
         **_QUIET,
         "llm_base_url": "",
@@ -872,12 +930,7 @@ def _run_forward(tmp_path, body, *, rules_path=None, extra_settings=None):
                 return await proxy.forward(request, "v1/chat/completions")
 
             response = asyncio.run(run())
-            records = [
-                json.loads(line)
-                for line in open(tmp_path / "prompt_trim.jsonl", encoding="utf-8")
-                if line.strip()
-            ]
-            return response, records, mock.requests[0]
+            return response, read_records(tmp_path / "prompt_trim.jsonl"), mock.requests[0]
 
 
 def _counter_delta(before, after, name):
@@ -891,7 +944,7 @@ def _counter_delta(before, after, name):
     }
 
 
-def test_integration_forwards_trimmed_body_records_it_and_counts_it(tmp_path):
+def test_integration_forwards_trimmed_body_records_it_and_counts_it(tmp_path, read_records):
     rules_path = _write_rules(
         tmp_path,
         [
@@ -913,7 +966,9 @@ def test_integration_forwards_trimmed_body_records_it_and_counts_it(tmp_path):
     ).encode()
     before = telemetry.snapshot()
 
-    response, records, captured = _run_forward(tmp_path, body, rules_path=rules_path)
+    response, records, captured = _run_forward(
+        tmp_path, body, read_records=read_records, rules_path=rules_path
+    )
 
     after = telemetry.snapshot()
     assert response.status_code == 200
@@ -936,7 +991,7 @@ def test_integration_forwards_trimmed_body_records_it_and_counts_it(tmp_path):
     assert delta['action="sub",mode="apply",rule="trim-system"'] == 1
 
 
-def test_integration_dry_run_forwards_original_bytes_and_records_changes(tmp_path):
+def test_integration_dry_run_forwards_original_bytes_and_records_changes(tmp_path, read_records):
     rules_path = _write_rules(
         tmp_path,
         [
@@ -947,7 +1002,7 @@ def test_integration_dry_run_forwards_original_bytes_and_records_changes(tmp_pat
             }
         ],
     )
-    body = json.dumps(
+    body = _raw_body(
         {
             "model": "test",
             "messages": [
@@ -955,12 +1010,13 @@ def test_integration_dry_run_forwards_original_bytes_and_records_changes(tmp_pat
                 {"role": "user", "content": "task"},
             ],
         }
-    ).encode()
+    )
     before = telemetry.snapshot()
 
     response, records, captured = _run_forward(
         tmp_path,
         body,
+        read_records=read_records,
         rules_path=rules_path,
         extra_settings={"prompt_trim_dry_run": True},
     )
@@ -974,13 +1030,21 @@ def test_integration_dry_run_forwards_original_bytes_and_records_changes(tmp_pat
     assert delta['action="replace",mode="dry_run",rule="trim-system"'] == 1
 
 
-def test_integration_disabled_and_no_match_forward_identical_bytes(tmp_path):
-    body = json.dumps({"model": "test", "messages": [{"role": "user", "content": "task"}]}).encode()
+def test_integration_disabled_and_no_match_forward_identical_bytes(tmp_path, read_records):
+    body = _raw_body(
+        {
+            "model": "test",
+            "messages": [
+                {"role": "system", "content": "preamble"},
+                {"role": "user", "content": "task"},
+            ],
+        }
+    )
 
     before = telemetry.snapshot()
-    _, records, captured = _run_forward(tmp_path, body)
+    _, records, captured = _run_forward(tmp_path, body, read_records=read_records)
     after = telemetry.snapshot()
-    assert json.loads(captured) == json.loads(body)
+    assert captured == body  # byte-for-byte same request body
     assert records[-1]["prompt_trim"] is None
     assert _counter_delta(before, after, "prompt_trim_skipped_total")['reason="disabled"'] == 1
 
@@ -994,12 +1058,14 @@ def test_integration_disabled_and_no_match_forward_identical_bytes(tmp_path):
             }
         ],
     )
-    _, records, captured = _run_forward(tmp_path, body, rules_path=rules_path)
-    assert json.loads(captured) == json.loads(body)
+    _, records, captured = _run_forward(
+        tmp_path, body, read_records=read_records, rules_path=rules_path
+    )
+    assert captured == body  # byte-for-byte same request body
     assert records[-1]["prompt_trim"] is None
 
 
-def test_integration_records_both_prompt_trim_and_overflow(tmp_path):
+def test_integration_records_both_prompt_trim_and_overflow(tmp_path, read_records):
     rules_path = _write_rules(
         tmp_path,
         [
@@ -1024,6 +1090,7 @@ def test_integration_records_both_prompt_trim_and_overflow(tmp_path):
     _, records, captured = _run_forward(
         tmp_path,
         body,
+        read_records=read_records,
         rules_path=rules_path,
         extra_settings={
             "message_overflow_enabled": True,
@@ -1040,7 +1107,7 @@ def test_integration_records_both_prompt_trim_and_overflow(tmp_path):
     assert final["message_overflow"][0]["index"] == 2
 
 
-def test_prompt_trimming_runs_before_the_overflow_guard(tmp_path):
+def test_prompt_trimming_runs_before_the_overflow_guard(tmp_path, read_records):
     # The rule shortens the tool result below the overflow threshold. If the
     # overflow guard ran first, it would warn/truncate it and record a change.
     rules_path = _write_rules(
@@ -1066,6 +1133,7 @@ def test_prompt_trimming_runs_before_the_overflow_guard(tmp_path):
     _, records, captured = _run_forward(
         tmp_path,
         body,
+        read_records=read_records,
         rules_path=rules_path,
         extra_settings={
             "prompt_trim_truncate_marker": "..",
@@ -1080,7 +1148,7 @@ def test_prompt_trimming_runs_before_the_overflow_guard(tmp_path):
     assert records[-1]["message_overflow"] is None
 
 
-def test_integration_streaming_path_forwards_trimmed_body(tmp_path):
+def test_integration_streaming_path_forwards_trimmed_body(tmp_path, read_records):
     rules_path = _write_rules(
         tmp_path,
         [
@@ -1109,6 +1177,7 @@ def test_integration_streaming_path_forwards_trimmed_body(tmp_path):
             ]
         }
     ]
+    before = telemetry.snapshot()
 
     with MockUpstream(specs) as mock:
         with settings_override(
@@ -1127,10 +1196,15 @@ def test_integration_streaming_path_forwards_trimmed_body(tmp_path):
 
             response = asyncio.run(run())
             captured = json.loads(mock.requests[0])
+            records = read_records(tmp_path / "prompt_trim_stream.jsonl")
 
+    after = telemetry.snapshot()
     assert response.status_code == 200
     assert captured["messages"][0]["content"] == "PUBLIC"
     assert b"ok" in response.body
+    assert records[-1]["prompt_trim"][0]["rule"] == "trim-system"
+    delta = _counter_delta(before, after, "prompt_trim_rules_total")
+    assert delta['action="replace",mode="apply",rule="trim-system"'] == 1
 
 
 def test_invalid_file_logs_once_disables_trimming_and_still_serves(tmp_path, caplog, read_records):
@@ -1179,7 +1253,7 @@ def test_invalid_file_logs_once_disables_trimming_and_still_serves(tmp_path, cap
     assert caplog.text.count("invalid prompt-trim rule file") == 1
 
 
-def test_integration_scan_bound_counts_a_skip(tmp_path):
+def test_integration_scan_bound_counts_a_skip(tmp_path, read_records):
     rules_path = _write_rules(
         tmp_path,
         [
@@ -1198,6 +1272,7 @@ def test_integration_scan_bound_counts_a_skip(tmp_path):
     _, records, captured = _run_forward(
         tmp_path,
         body,
+        read_records=read_records,
         rules_path=rules_path,
         extra_settings={"prompt_trim_max_scan_chars": 5},
     )

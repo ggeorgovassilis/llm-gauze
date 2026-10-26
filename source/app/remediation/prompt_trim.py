@@ -204,25 +204,25 @@ def _witness_for(pattern: re.Pattern[str]) -> str | None:
     return None
 
 
-def _content_matches(rule: PromptRule, role: str, content: str) -> bool:
+def _content_matches(rule: PromptRule, content: str) -> bool:
     """Whether a candidate content still trips the rule's own ``when``."""
-    if rule.roles is not None and role not in rule.roles:
-        return False
     if len(content) < rule.min_chars:
         return False
     return rule.pattern.search(content) is not None
 
 
-def _apply_action(rule: PromptRule, content: str, marker: str) -> str | None:
-    """Apply a rule's action to ``content`` (``None`` means drop)."""
-    if rule.action == "drop":
-        return None
+def _apply_action(rule: PromptRule, content: str, marker: str) -> str:
+    """Apply a non-``drop`` rule's action to ``content``."""
     if rule.action == "replace":
         return rule.content or ""
     if rule.action == "sub":
         return rule.pattern.sub(rule.replacement or "", content)
     assert rule.chars is not None  # validated
     chars = rule.chars
+    if len(content) <= chars:
+        # Already within the bound: leave it untouched (adding the marker would
+        # grow the message and misreport it as trimmed).
+        return content
     if chars <= len(marker):
         # No room for content; a bounded slice of the marker still honours the
         # "marker counts within chars" bound.
@@ -234,7 +234,6 @@ def _is_non_idempotent(rule: PromptRule, marker: str) -> bool:
     """Whether the rule's own output would match the rule again."""
     if rule.action == "drop":
         return False
-    role = rule.roles[0] if rule.roles else "system"
     witness = _witness_for(rule.pattern)
     if witness is not None:
         if len(witness) < rule.min_chars:
@@ -243,7 +242,7 @@ def _is_non_idempotent(rule: PromptRule, marker: str) -> bool:
                 witness = padded
         if len(witness) >= rule.min_chars and rule.pattern.search(witness) is not None:
             output = _apply_action(rule, witness, marker)
-            if output is not None and _content_matches(rule, role, output):
+            if _content_matches(rule, output):
                 return True
     # Fallback for patterns with no witness: the action's own text is the
     # output fragment that could re-match.
@@ -251,7 +250,7 @@ def _is_non_idempotent(rule: PromptRule, marker: str) -> bool:
     if rule.action == "truncate" and rule.chars is not None:
         candidates.append(marker[: rule.chars])
     for candidate in candidates:
-        if candidate and _content_matches(rule, role, candidate):
+        if candidate and _content_matches(rule, candidate):
             return True
     return False
 
@@ -487,7 +486,10 @@ class PromptTrimTransform(Transform):
                     break
 
                 new_content = _apply_action(rule, current, self.marker)
-                assert new_content is not None  # only ``drop`` returns None
+                if new_content == current:
+                    # A bound the content already satisfies is not a trim:
+                    # leave the message and the record untouched.
+                    continue
                 change = self._change(
                     rule, index, message.get("role"), len(current), len(new_content)
                 )

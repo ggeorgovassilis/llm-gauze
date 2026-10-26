@@ -6,6 +6,7 @@ table and asserts each emitter produces `kind` plus only the keys documented
 for that kind, so a new undocumented field fails the suite.
 """
 
+import ast
 import asyncio
 import json
 import re
@@ -23,7 +24,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = REPO_ROOT / "docs" / "record-schema.md"
 # Optional on every kind per the schema prose, not repeated per row in the table.
 GENERIC_CHANGE_KEYS = {"index", "role"}
-KIND_LITERAL = re.compile(r"""["']kind["']\s*:\s*["']([A-Za-z0-9_]+)["']""")
 
 
 def _documented_change_keys() -> dict[str, set[str]]:
@@ -42,13 +42,34 @@ def _documented_change_keys() -> dict[str, set[str]]:
     return documented
 
 
+def _kinds_in_source(source: str) -> set[str]:
+    """Kinds literal-emitted as a ``"kind"`` dict value in ``source``.
+
+    The source is parsed rather than regex-scanned so a kind named only in a
+    comment or docstring cannot satisfy the documented-kind guard.
+    """
+    kinds: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values):
+            if (
+                isinstance(key, ast.Constant)
+                and key.value == "kind"
+                and isinstance(value, ast.Constant)
+                and isinstance(value.value, str)
+            ):
+                kinds.add(value.value)
+    return kinds
+
+
 def _kinds_emitted_in_source() -> set[str]:
     """All change kinds literal-emitted by the guards and the proxy."""
     sources = [REPO_ROOT / "source" / "app" / "proxy.py"]
     sources.extend(sorted((REPO_ROOT / "source" / "app" / "remediation").glob("*.py")))
     kinds: set[str] = set()
     for path in sources:
-        kinds.update(KIND_LITERAL.findall(path.read_text(encoding="utf-8")))
+        kinds.update(_kinds_in_source(path.read_text(encoding="utf-8")))
     return kinds
 
 
@@ -71,8 +92,29 @@ def test_documented_kinds_cover_every_emitter():
 
 
 def test_kind_source_scan_handles_quote_styles_and_digits():
-    source = """{"kind": "tool_overflow"} {'kind': 'think2'} 'kind': "flagged3" """
-    assert KIND_LITERAL.findall(source) == ["tool_overflow", "think2", "flagged3"]
+    source = """records = [{"kind": "tool_overflow"}, {'kind': 'think2'}]"""
+    assert _kinds_in_source(source) == {"tool_overflow", "think2"}
+
+
+def test_kind_source_scan_ignores_comments_and_docstrings():
+    source = '''\
+"""Example: ``{"kind": "ghost_emitter"}`` in a docstring."""
+
+records = [{"kind": "tool_overflow"}]
+# {"kind": "commented_out"}
+'''
+    assert _kinds_in_source(source) == {"tool_overflow"}
+
+
+def test_assert_documented_rejects_undocumented_key():
+    with pytest.raises(AssertionError, match="documented"):
+        _assert_documented([{"kind": "repaired_arguments", "chars": 1}])
+
+
+def test_assert_documented_rejects_missing_kind_specific_key():
+    # `tool_overflow` also requires `truncated`, so `size` alone is not enough.
+    with pytest.raises(AssertionError, match="documented"):
+        _assert_documented([{"kind": "tool_overflow", "size": 5}])
 
 
 def test_generic_optional_keys_are_allowed_on_every_kind():

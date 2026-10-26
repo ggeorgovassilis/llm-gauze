@@ -300,9 +300,10 @@ the #153 dry-run and an A/B run before shipping.
    counters for the expected 100% match rates. Recorded `request_body` remains
    the forwarded (post-trim) body; `chars_before` is the evidence of removal.
 5. **Re-validate on drift (#154).** Follow [Re-validation](#re-validation):
-   capture a fresh corpus with the #152 protocol, run the same command, and
-   compare the per-rule match rate and measured saving with the baseline. File a
-   follow-up ticket to update or retire a stale rule; do not edit it silently.
+   capture a fresh corpus into a new, empty directory with the #152 protocol,
+   analyse that directory only, and compare the per-rule match rate and measured
+   saving with the baseline. File a follow-up ticket to update or retire a stale
+   rule; do not edit it silently.
 6. **Quality check before enabling.** #153 should compare a small representative
    sample with trimming off/on (and with the identity rule alone) on the local
    model. The corpus proves the size and recurrence, not the answer quality.
@@ -321,7 +322,7 @@ script already emits every metric the thresholds compare.
 Measured in #152 on the corpus above (2,084 requests, five dated files, 13
 conversations) with `config/prompt_rules.example.json`:
 
-| Rule id | Baseline match rate | Baseline median saving / request |
+| Rule id | Baseline match rate | Baseline median saved / match |
 | --- | ---: | ---: |
 | `replace-identity-policy` | 100% (2,084 / 2,084) | 243 chars |
 | `compact-output-formatting-tail` | 100% (2,084 / 2,084) | 115 chars |
@@ -361,25 +362,37 @@ instead of treating the result as drift.
 
 ### Procedure
 
-1. **Capture a fresh corpus with the #152 protocol.** Run the gateway with
-   recording enabled (`RECORDING_ENABLED=true`, dated snapshots under
-   `DATA_DIR`/`RECORD_FILE`) and use VS Code/Copilot normally against it. Keep
-   the dated `records-*.jsonl` files local; `data/` is gitignored. The sample
-   floor is at least 100 forwarded requests over at least three
-   `records-*.jsonl` files, each containing a user turn. Exclude the live,
-   still-growing `records.jsonl`, as #152 did.
-2. **Confirm the sample before comparing.** Run the command and check that
-   `corpus.sample_floor.met` is `true`; note `corpus.totals.requests` and the
-   `corpus.files` hashes so the run is reproducible. A corpus below the floor
-   cannot cross the thresholds meaningfully.
-3. **Run the committed analysis command** (the same one as #152, with the
-   committed example rules):
+1. **Capture a fresh corpus with the #152 protocol into an isolated directory.**
+   Point `DATA_DIR` at a new, empty directory for this run (in the container
+   `/data/revalidation-2026-10`, which maps to the host's
+   `data/revalidation-2026-10`; keep `RECORD_FILE=records.jsonl`) and run the
+   gateway with `RECORDING_ENABLED=true`. Do not reuse `data/`: it still
+   holds the five baseline `records-*.jsonl` files, and the script reads every
+   matching file in the supplied directory, so fresh traffic would be
+   aggregated with the baseline and a rule that stopped matching could never
+   cross the thresholds. Confirm the directory contains no `records-*.jsonl`
+   before starting. Use VS Code/Copilot normally against the gateway; a restart
+   rotates the live `records.jsonl` into a dated `records-<stamp>.jsonl`, and
+   those dated files are what the script reads. Keep them local; `data/` is
+   gitignored. The sample floor is at least 100 forwarded requests over at
+   least three dated files, each containing a user turn.
+2. **Confirm the sample before comparing.** Run the command with `--data-dir
+   <isolated dir>` and check that `corpus.sample_floor.met` is `true`. Confirm
+   `corpus.files` lists only this run's dated snapshots (no baseline file
+   names) and that `corpus.totals.requests` matches the number of requests
+   captured; `corpus.data_dir` echoes the directory that was read. Note the
+   file hashes so the run is reproducible. A corpus below the floor, or one
+   that includes baseline files, is not comparable.
+3. **Run the committed analysis command** against the isolated directory (the
+   same script and committed example rules as #152):
 
    ```bash
-   ./scripts/analyse-prompt-preambles --data-dir data
+   ./scripts/analyse-prompt-preambles --data-dir data/revalidation-2026-10
    ```
 
-   It is read-only and prints aggregates only; it never emits prompt text. Use
+   Replace the directory with the one from step 1. It is read-only, reads only
+   the dated `records-*.jsonl` files in that directory (never the live
+   `records.jsonl`), prints aggregates only and never emits prompt text. Use
    `--rules` only to check a different deployed rule file, and say so in the
    result, because the baselines above are for the committed example set.
 4. **Compare per-rule results.** For each entry in `rules`, read `match_rate`
@@ -417,21 +430,22 @@ live traffic, while this procedure measures it against the corpus baseline.
 
 The runtime already exposes these signals; none needs new code.
 
-- `prompt_trim_skipped_total{reason}` counts runs that did not evaluate rules.
-  `reason` is `disabled` (trimming off by configuration), `invalid_rules` (the
-  rule file failed to load or validate) or `scan_bound` (a per-message scan
-  limit was reached). Check it first: a nonzero rate means trimming is not
-  running, or is only partly applied, so flat rule counters do not indicate
-  drift.
+- `prompt_trim_skipped_total{reason}` counts requests for which trimming did
+  not fully evaluate the rules. `reason` is `disabled` (trimming off by
+  configuration), `invalid_rules` (the rule file failed to load or validate) or
+  `scan_bound` (a per-message scan limit was reached, so the run was partial).
+  Check it first: a nonzero rate means trimming is off or only partly applied,
+  so flat rule counters do not indicate drift.
 - `prompt_trim_rules_total{rule,action,mode}` increments once per rule
   application; `mode` is `apply` or `dry_run`. If a rule stops matching, its
   series stays flat while requests continue. The counter has no request
-  denominator, so divide its increase over an interval by the number of
-  requests forwarded in the same interval to get the observed match rate.
-- Each recorded exchange carries a `prompt_trim` list with one entry per
-  application: `rule`, `action`, `index`, `role`, `chars_before` and
-  `chars_after`. A rule id disappearing from records that used to carry it is
-  the same drop; `chars_before - chars_after` is that application's saving.
+  denominator, so divide its increase over an interval by the increase in
+  `requests_total` over the same interval to get the observed match rate.
+- Each recorded exchange carries `prompt_trim`: a list with one entry per
+  application, or `null` when no rule applied (including when trimming is
+  disabled). Each entry has `rule`, `action`, `index`, `role`, `chars_before`
+  and `chars_after`. A rule id disappearing from records that used to carry it
+  is the same drop; `chars_before - chars_after` is that application's saving.
   Dry-run records the entries without changing the forwarded body, which makes
   it the safest way to watch for drift.
 

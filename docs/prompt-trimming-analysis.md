@@ -299,19 +299,27 @@ the #153 dry-run and an A/B run before shipping.
    `prompt_trim` record entries and the `prompt_trim_rules_total{rule,action,mode}`
    counters for the expected 100% match rates. Recorded `request_body` remains
    the forwarded (post-trim) body; `chars_before` is the evidence of removal.
-5. **Re-validate on drift (#154).** Capture a fresh corpus with the same
-   collection protocol (at least 100 forwarded requests over at least three
-   `records-*.jsonl` files, each containing a user turn; exclude the live
-   `records.jsonl`), run the same command, and compare the per-rule match rate
-   and measured saving with this baseline. #154 owns the threshold; its starting
-   rule is a regression when a match rate falls below 50% of baseline or the
-   measured saving falls below half. File a follow-up ticket to update or retire
-   a stale rule; do not edit it silently.
+5. **Re-validate on drift (#154).** Follow [Re-validation](#re-validation):
+   capture a fresh corpus with the #152 protocol, run the same command, and
+   compare the per-rule match rate and measured saving with the baseline. File a
+   follow-up ticket to update or retire a stale rule; do not edit it silently.
 6. **Quality check before enabling.** #153 should compare a small representative
    sample with trimming off/on (and with the identity rule alone) on the local
    model. The corpus proves the size and recurrence, not the answer quality.
 
-## Baseline for #154
+## Re-validation
+
+The rules match text produced by another product. A VS Code/Copilot update can
+change the preamble wording and every rule silently stops matching, so context
+is consumed as before and nothing alerts. This is the standing procedure for
+[#154](https://github.com/ggeorgovassilis/llm-gauze/issues/154): it reuses the
+#152 corpus protocol and the committed analysis command. It adds no code; the
+script already emits every metric the thresholds compare.
+
+### Baseline
+
+Measured in #152 on the corpus above (2,084 requests, five dated files, 13
+conversations) with `config/prompt_rules.example.json`:
 
 | Rule id | Baseline match rate | Baseline median saving / request |
 | --- | ---: | ---: |
@@ -319,9 +327,115 @@ the #153 dry-run and an A/B run before shipping.
 | `compact-output-formatting-tail` | 100% (2,084 / 2,084) | 115 chars |
 | `discard-output-formatting-example` | 100% (2,084 / 2,084) | 195 chars |
 
-The aggregate baseline is 553 characters per request, 4.11% of the request body
-and 7.07% of message content. These are the values #154 should compare against
-when the client prompt composition changes.
+The aggregate baseline is **553 content characters per request** (p95 553),
+**4.11%** of the request body and **7.07%** of message content. The preamble
+falls from 6,952 to 6,399 characters (median) and the stable prefix from 7,006
+to 6,453. Per-rule totals and the full saving table are in
+[Starter rule set](#starter-rule-set) and [Measured saving](#measured-saving).
+
+### Regression thresholds
+
+A result is a regression when a row falls below its threshold:
+
+| Signal | Baseline | Regression when below |
+| --- | ---: | ---: |
+| `replace-identity-policy` match rate | 100% | 50% |
+| `compact-output-formatting-tail` match rate | 100% | 50% |
+| `discard-output-formatting-example` match rate | 100% | 50% |
+| `replace-identity-policy` median saved / match | 243 chars | 121.5 chars |
+| `compact-output-formatting-tail` median saved / match | 115 chars | 57.5 chars |
+| `discard-output-formatting-example` median saved / match | 195 chars | 97.5 chars |
+| Aggregate median content saved / request | 553 chars | 276.5 chars |
+| Median share of request body saved | 4.11% | 2.055% |
+| Median share of message content saved | 7.07% | 3.535% |
+
+The thresholds are proportional (half the baseline): compare rates and medians,
+not raw match counts, because a re-validation corpus can be smaller. Any single
+row crossing its threshold is a regression for that rule. The common case is a
+rule that stops matching entirely: its match rate falls to 0% and the aggregate
+saving loses that rule's contribution.
+
+A run is only comparable when `saving.idempotent` is `true` and
+`rule_validation.errors` is empty. If either check fails, file a bug ticket
+instead of treating the result as drift.
+
+### Procedure
+
+1. **Capture a fresh corpus with the #152 protocol.** Run the gateway with
+   recording enabled (`RECORDING_ENABLED=true`, dated snapshots under
+   `DATA_DIR`/`RECORD_FILE`) and use VS Code/Copilot normally against it. Keep
+   the dated `records-*.jsonl` files local; `data/` is gitignored. The sample
+   floor is at least 100 forwarded requests over at least three
+   `records-*.jsonl` files, each containing a user turn. Exclude the live,
+   still-growing `records.jsonl`, as #152 did.
+2. **Confirm the sample before comparing.** Run the command and check that
+   `corpus.sample_floor.met` is `true`; note `corpus.totals.requests` and the
+   `corpus.files` hashes so the run is reproducible. A corpus below the floor
+   cannot cross the thresholds meaningfully.
+3. **Run the committed analysis command** (the same one as #152, with the
+   committed example rules):
+
+   ```bash
+   ./scripts/analyse-prompt-preambles --data-dir data
+   ```
+
+   It is read-only and prints aggregates only; it never emits prompt text. Use
+   `--rules` only to check a different deployed rule file, and say so in the
+   result, because the baselines above are for the committed example set.
+4. **Compare per-rule results.** For each entry in `rules`, read `match_rate`
+   and `median_chars_saved_per_matched_request` and check them against the
+   threshold table. Check `matched_requests` too when the corpus size changed.
+5. **Compare the aggregate saving.** In `saving`, read
+   `content_chars_saved.median`, `share_of_request_body.median` and
+   `share_of_message_content.median`. The p95 values are informative but are
+   not thresholds.
+6. **Act on a crossed threshold.** File a new follow-up ticket to update or
+   retire the stale rule. Include the rule id, baseline versus observed match
+   rate and saving, the command, the gateway commit and the corpus manifest
+   (file hashes and counts); include no prompt text. Do not edit the rule or
+   this baseline silently: the follow-up ticket owns the fix and the refreshed
+   baseline. Retire a rule outright when the client no longer emits the block.
+7. **Record a clean run.** If no threshold is crossed, note the date, gateway
+   commit, corpus manifest and outcome (for example as a comment on the
+   re-validation ticket). No rule or baseline change is needed.
+
+If the committed script cannot answer a comparison this procedure needs, that is
+a separate tooling ticket; do not add ad-hoc code as part of a re-validation.
+
+### When to run
+
+- After any VS Code/Copilot update that changes prompt composition: release
+  notes about the system prompt, instructions, tools, agents or modes, or the
+  first recorded requests showing new, renamed or reworded preamble blocks.
+- Otherwise periodically: at least once a quarter, and whenever the runtime
+  signals below show that a rule has stopped matching.
+
+The runtime signals are an early warning, not a substitute: they show a drop on
+live traffic, while this procedure measures it against the corpus baseline.
+
+### Runtime signals
+
+The runtime already exposes these signals; none needs new code.
+
+- `prompt_trim_skipped_total{reason}` counts runs that did not evaluate rules.
+  `reason` is `disabled` (trimming off by configuration), `invalid_rules` (the
+  rule file failed to load or validate) or `scan_bound` (a per-message scan
+  limit was reached). Check it first: a nonzero rate means trimming is not
+  running, or is only partly applied, so flat rule counters do not indicate
+  drift.
+- `prompt_trim_rules_total{rule,action,mode}` increments once per rule
+  application; `mode` is `apply` or `dry_run`. If a rule stops matching, its
+  series stays flat while requests continue. The counter has no request
+  denominator, so divide its increase over an interval by the number of
+  requests forwarded in the same interval to get the observed match rate.
+- Each recorded exchange carries a `prompt_trim` list with one entry per
+  application: `rule`, `action`, `index`, `role`, `chars_before` and
+  `chars_after`. A rule id disappearing from records that used to carry it is
+  the same drop; `chars_before - chars_after` is that application's saving.
+  Dry-run records the entries without changing the forwarded body, which makes
+  it the safest way to watch for drift.
+
+Stale rules are retired or updated through a new ticket, never edited silently.
 
 ## Limitations
 

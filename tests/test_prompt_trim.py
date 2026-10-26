@@ -203,16 +203,17 @@ def test_truncate_marker_longer_than_chars_stays_within_bound():
     assert out["messages"][0]["content"] == "..."
 
 
-@pytest.mark.parametrize("content", ["abc", "a" * 100])
-def test_truncate_never_grows_content_that_already_fits(content):
-    # The rule is idempotent for its shortest witness (200 chars), but a
-    # message inside the bound must be left byte-identical and unrecorded.
+@pytest.mark.parametrize(("content", "chars"), [("abc", 100), ("abc", 3)])
+def test_truncate_never_grows_content_that_already_fits(content, chars):
+    # A plain "cap this preamble" rule is accepted at load time; a message
+    # inside the bound (or exactly on it) must be left byte-identical and
+    # unrecorded.
     transform = _transform(
         [
             {
                 "id": "bounded",
-                "when": {"role": "system", "content_regex": r"^a{200}$|^a{100}$|^abc$"},
-                "then": {"action": "truncate", "chars": 100},
+                "when": {"role": "system", "content_regex": r"^abc$"},
+                "then": {"action": "truncate", "chars": chars},
             }
         ],
         marker="... [trimmed]",
@@ -706,14 +707,6 @@ def _valid_rule(**overrides):
                 )
             ]
         ),
-        _document(
-            [
-                _valid_rule(
-                    when={"role": "system", "content_regex": "foo"},
-                    then={"action": "truncate", "chars": 100},
-                )
-            ]
-        ),
     ],
 )
 def test_invalid_documents_are_rejected(document):
@@ -845,6 +838,55 @@ def test_from_settings_loads_a_valid_file(tmp_path):
     assert transform.max_scan_chars == 1234
     assert transform.marker == "..."
     assert [rule.id for rule in transform.rules] == ["rule"]
+
+
+def test_from_settings_accepts_and_applies_a_preamble_cap_rule(tmp_path):
+    """A plain "cap this preamble at N characters" rule must load and trim.
+
+    ``truncate`` converges in one step, so it is idempotent even when the
+    generated witness already fits the bound; the loader must not reject it.
+    """
+    path = tmp_path / "rules.json"
+    path.write_text(
+        json.dumps(
+            _document(
+                [
+                    {
+                        "id": "cap-preamble",
+                        "when": {"role": "system", "content_regex": r"^You are"},
+                        "then": {"action": "truncate", "chars": 20},
+                    }
+                ]
+            )
+        ),
+        encoding="utf-8",
+    )
+    with settings_override(
+        prompt_trim_enabled=True,
+        prompt_trim_rules_file=str(path),
+        prompt_trim_truncate_marker="...",
+    ):
+        transform = PromptTrimTransform.from_settings()
+
+    assert transform.enabled is True
+    assert transform.disabled_reason is None
+    assert [rule.id for rule in transform.rules] == ["cap-preamble"]
+
+    content = "You are a helpful assistant. " + "x" * 100
+    out, changes = transform.apply(_body({"role": "system", "content": content}))
+
+    assert out["messages"][0]["content"] == content[:17] + "..."
+    assert changes == [
+        {
+            "kind": "prompt_trim",
+            "rule": "cap-preamble",
+            "index": 0,
+            "role": "system",
+            "action": "truncate",
+            "chars_before": len(content),
+            "chars_after": 20,
+        }
+    ]
 
 
 # --- determinism and the shipped rule set ------------------------------

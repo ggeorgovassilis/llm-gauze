@@ -232,7 +232,11 @@ def _apply_action(rule: PromptRule, content: str, marker: str) -> str:
 
 def _is_non_idempotent(rule: PromptRule, marker: str) -> bool:
     """Whether the rule's own output would match the rule again."""
-    if rule.action == "drop":
+    if rule.action in {"drop", "truncate"}:
+        # ``drop`` removes the message. ``truncate`` always converges in one
+        # step: a message that already fits the bound is left untouched, and a
+        # truncated result is within the bound, so a second application is a
+        # no-op. A no-op is idempotent, so neither can loop.
         return False
     witness = _witness_for(rule.pattern)
     if witness is not None:
@@ -247,8 +251,6 @@ def _is_non_idempotent(rule: PromptRule, marker: str) -> bool:
     # Fallback for patterns with no witness: the action's own text is the
     # output fragment that could re-match.
     candidates = [candidate for candidate in (rule.content, rule.replacement) if candidate]
-    if rule.action == "truncate" and rule.chars is not None:
-        candidates.append(marker[: rule.chars])
     for candidate in candidates:
         if candidate and _content_matches(rule, candidate):
             return True

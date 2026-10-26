@@ -561,9 +561,12 @@ rewriting prompt text changes model behaviour and is a quality risk.
   `sub` and `truncate` compose in file order; `drop` and `replace` are terminal
   for that message. See `config/prompt_rules.example.json` for the starter set.
 - Load-time validation rejects duplicate ids, unknown actions, uncompilable
-  regexes, missing per-action fields, and non-idempotent rules (a rule whose
-  own output would match it again). An empty, unreadable or invalid file logs
-  one `ERROR`, disables trimming, and leaves requests served.
+  regexes, missing per-action fields, and non-idempotent `replace`/`sub` rules
+  (a rule whose own output would match it again). `truncate` is always
+  idempotent: a message that already fits the bound is left untouched, and a
+  truncated result is within the bound, so re-applying it is a no-op. An empty,
+  unreadable or invalid file logs one `ERROR`, disables trimming, and leaves
+  requests served.
 - Evaluation is deterministic: no timestamps, ids, sizes or random content are
   inserted. The same `(body, rules)` pair produces byte-identical output across
   turns and restarts, so the retained prefix stays cacheable.

@@ -34,6 +34,9 @@ COPY scripts/analyse-prompt-preambles scripts/
 FROM base AS runtime
 
 COPY source/ .
+# Ship the starter rule set for reference; the operator's rules file is
+# bind-mounted read-only by the compose files.
+COPY config/prompt_rules.example.json config/
 
 # The gateway listens on a fixed port 8000 inside the container; the compose
 # files map a host port onto it (see `PORT` in `.env.example`).

@@ -40,6 +40,7 @@ from app.remediation.empty_stop import EmptyStopPolicy, token_counts
 from app.remediation.extract import ExtractionPolicy
 from app.remediation.loop_retry import LoopRetryPolicy
 from app.remediation.overflow import MessageOverflowGuard
+from app.remediation.prompt_trim import PromptTrimTransform
 from app.remediation.retry import ExponentialBackoff, RetryableDetector
 from app.remediation.runaway import RunawayReasoningPolicy
 from app.remediation.think import ThinkContentGuard
@@ -231,6 +232,43 @@ def _apply_overflow_guard(body: bytes) -> tuple[list, bytes]:
     if not changes:
         return [], body
     return changes, json.dumps(data).encode("utf-8")
+
+
+def _apply_prompt_trim(transform: PromptTrimTransform, body: bytes) -> tuple[list, bytes]:
+    """Rewrite prompt preambles before forwarding (request-side transform).
+
+    Runs before :func:`_apply_overflow_guard`, so the overflow guard sees the
+    trimmed content. Returns ``(changes, body)``. The original bytes are
+    returned untouched when trimming is disabled, in dry-run mode, or when no
+    rule matches, keeping the caller's ``Content-Length`` valid. Telemetry is
+    emitted here rather than in the transform so the transform stays pure.
+    """
+    if transform.disabled_reason is not None:
+        telemetry.incr("prompt_trim_skipped_total", {"reason": transform.disabled_reason})
+        return [], body
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return [], body
+    if not isinstance(data, dict):
+        return [], body
+
+    result = transform.process(data)
+    if result.scan_skips:
+        telemetry.incr("prompt_trim_skipped_total", {"reason": "scan_bound"}, result.scan_skips)
+    mode = "dry_run" if transform.dry_run else "apply"
+    for change in result.changes:
+        telemetry.incr(
+            "prompt_trim_rules_total",
+            {
+                "rule": change["rule"],
+                "action": change["action"],
+                "mode": mode,
+            },
+        )
+    if not result.changed:
+        return result.changes, body
+    return result.changes, json.dumps(result.body).encode("utf-8")
 
 
 def _reconstruct_chat_completion(
@@ -485,6 +523,9 @@ class Proxy:
         )
         self.retry_policy = _build_retry_policy()
         self.pipeline = StreamingPipeline(self.client)
+        # Rules are loaded and validated once for the process lifetime, so an
+        # invalid file logs a single ERROR and disables trimming.
+        self.prompt_trim = PromptTrimTransform.from_settings()
 
     async def aclose(self) -> None:
         """Release the upstream client and its connection pool.
@@ -579,12 +620,14 @@ class Proxy:
             _decode(body),
         )
 
-        # Request-side guard: trim oversized tool results before forwarding, so
-        # a single runaway ``role: "tool"`` message cannot silently eat the
-        # model's context window. Chat completions only — the only shape that
-        # carries ``messages``.
+        # Request-side transforms run on chat completions only — the only shape
+        # that carries ``messages``. Prompt trimming runs first, so the overflow
+        # guard sees (and can act on) the already-trimmed content.
+        prompt_trim_changes: list = []
         overflow_changes: list = []
+        original_body = body
         if _is_chat_completion(url):
+            prompt_trim_changes, body = _apply_prompt_trim(self.prompt_trim, body)
             overflow_changes, body = _apply_overflow_guard(body)
             if overflow_changes:
                 logger.warning(
@@ -599,12 +642,13 @@ class Proxy:
             "query": query,
             "request_headers": _redact_credentials(dict(request.headers)),
             "request_body": _decode(body),
+            "prompt_trim": prompt_trim_changes or None,
             "message_overflow": overflow_changes or None,
         }
 
         # The client's Authorization header is forwarded to the upstream unchanged.
         headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP_HEADERS}
-        if overflow_changes:
+        if body is not original_body:
             # The body was rewritten, so any inbound Content-Length is stale;
             # let httpx recompute it from the actual body (see the streaming
             # path's comment on the same h11 failure mode).

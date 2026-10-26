@@ -22,7 +22,7 @@ Every record carries:
 | `request_id` | The request's id (present on the buffered path and on records written by callers that pass a `base_entry`). |
 | `method` / `path` / `query` | The inbound request method, path and query string. |
 | `request_headers` | The inbound request headers (buffered path); `Authorization` and `Proxy-Authorization` values are replaced with `[redacted]`. |
-| `request_body` | The client's original request body (decoded to a string). |
+| `request_body` | The request body actually forwarded upstream (decoded to a string). Request-side prompt trimming and message-overflow rewriting run before recording, so this is the post-trim body; `prompt_trim`'s `chars_before` values are the record-level evidence of what was removed. |
 | `attempt` / `max_attempts` | Which upstream attempt this record describes, and the configured retry budget. |
 | `duration` | Seconds spent on this attempt. |
 | `outcome` | The stable discriminator (see below). |
@@ -67,10 +67,11 @@ bodies stay distinguishable.
 
 A *change record* is a small dict that a guard or the proxy attaches to a
 record to report a mutation it made to the exchange. Change records are carried
-in three lists — `message_overflow`, `think_cleanup` and `tool_repair` — and each
-is `null` when that stage ran but nothing changed. Some success records omit a
-list key entirely when the stage never ran (for example a remediation-pass
-record that never reaches tool repair). Every change record has the same shape:
+in four lists — `prompt_trim`, `message_overflow`, `think_cleanup` and
+`tool_repair` — and each is `null` when that stage ran but nothing changed.
+Some success records omit a list key entirely when the stage never ran (for
+example a remediation-pass record that never reaches tool repair). Every
+change record has the same shape:
 
 * `kind` — **mandatory** on every change record; the discriminator listed in
   the table below.
@@ -92,6 +93,7 @@ same pair.)
 
 | `kind` | Emitted by | Fields besides `kind` | Meaning |
 | --- | --- | --- | --- |
+| `prompt_trim` | `PromptTrimTransform` (`remediation/prompt_trim.py`) | `rule`, `action`, `chars_before`, `chars_after` | A prompt-trim rule matched and rewrote (or, in dry-run, would rewrite) a message. `rule` is the rule id, `action` one of `drop`/`replace`/`sub`/`truncate`; the character counts describe the message content before and after that application. |
 | `tool_overflow` | `MessageOverflowGuard` (`remediation/overflow.py`) | `size`, `truncated` | A `role: "tool"` message exceeded `MESSAGE_OVERFLOW_THRESHOLD`. `size` is its original character count; `truncated` says whether it was cut to a bounded prefix. |
 | `relocated_think` | `ThinkContentGuard.relocate` (`remediation/think.py`) | `chars_before`, `chars_after`, `blocks` | Leaked thinking text was moved out of visible `content` into `reasoning`. The character counts describe `content`; `blocks` is the number of relocated blocks. |
 | `empty_content_placeholder` | `ThinkContentGuard.guard_empty` (`remediation/think.py`) and the finalising proxy (`proxy.py`) | — | Visible content was empty, so the configured placeholder was substituted. |

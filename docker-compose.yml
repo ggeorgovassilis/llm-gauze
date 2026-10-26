@@ -27,4 +27,7 @@ services:
     volumes:
       # Host-visible recording directory.
       - ./data:/data
+      # Operator-supplied prompt-trim rules (`config/prompt_rules.json` is
+      # gitignored; `config/prompt_rules.example.json` is the starter set).
+      - ./config:/app/config:ro
     restart: unless-stopped

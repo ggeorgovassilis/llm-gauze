@@ -24,6 +24,7 @@ COPY tests/ tests/
 # against their source of truth in source/app/config.py.
 COPY .env.example .
 COPY docs/ docs/
+COPY config/ config/
 
 # Runtime image: the gateway as a user runs it.
 FROM base AS runtime

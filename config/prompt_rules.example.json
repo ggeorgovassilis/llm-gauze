@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "replace-identity-policy",
+      "evidence_class": "system.identity",
+      "decision": "Replace",
+      "match_rate": 1.0,
+      "when": {
+        "role": "system",
+        "content_regex": "\\A(?:[^\\n]*\\n){7}(?=<instructions>)"
+      },
+      "then": {
+        "action": "sub",
+        "replacement": "You are GitHub Copilot, an AI programming assistant in VS Code using the gauze model. Identify yourself as GitHub Copilot. Follow the user's requirements and comply with Microsoft's content and copyright policies. Decline harmful, hateful, discriminatory, lewd, or violent requests. Answer briefly and impersonally.\n"
+      }
+    },
+    {
+      "id": "compact-output-formatting-tail",
+      "evidence_class": "system.output_formatting",
+      "decision": "Replace",
+      "match_rate": 1.0,
+      "when": {
+        "role": "system",
+        "content_regex": "(?<=</example>)[\\s\\S]*?(?=</outputFormatting>)"
+      },
+      "then": {
+        "action": "sub",
+        "replacement": "\nUse KaTeX for math ($...$ inline, $$...$$ blocks) and ```mermaid fenced blocks for diagrams.\n"
+      }
+    },
+    {
+      "id": "discard-output-formatting-example",
+      "evidence_class": "system.output_formatting.example",
+      "decision": "Discard",
+      "match_rate": 1.0,
+      "when": {
+        "role": "system",
+        "content_regex": "<example>[\\s\\S]*?</example>\\n?"
+      },
+      "then": {
+        "action": "sub",
+        "replacement": ""
+      }
+    }
+  ]
+}

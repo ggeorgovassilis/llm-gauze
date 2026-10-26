@@ -15,8 +15,8 @@ import logging
 from app.proxy import Proxy
 from app.recorder import Recorder
 from app.telemetry import telemetry
-from conftest import write_rules
 from mock_upstream import MockUpstream, chunk, make_request, settings_override
+from prompt_trim_support import write_rules
 
 _OK_BODY = json.dumps(
     {

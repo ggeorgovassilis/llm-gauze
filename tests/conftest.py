@@ -11,9 +11,9 @@
   ``copilot_body`` and ``make_record`` build the synthetic request bodies and
   recorded exchanges used by the prompt-trimming tests.
 
-It also exposes two plain helpers shared by the prompt-trim test modules:
-``rules_document`` wraps a rule list in a version-1 rule document, and
-``write_rules`` writes such a document into a temporary directory.
+Rule-file helpers shared by the prompt-trim test modules live in
+:mod:`prompt_trim_support`, not here, so those modules need not import
+``conftest`` directly.
 """
 
 import importlib.util
@@ -29,18 +29,6 @@ from mock_upstream import MockUpstream
 ROOT = Path(__file__).resolve().parents[1]
 ANALYSIS_SCRIPT = ROOT / "scripts" / "analyse-prompt-preambles"
 COPILOT_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "copilot_request_body.json"
-
-
-def rules_document(rules: list[dict[str, Any]]) -> dict[str, Any]:
-    """Wrap a rule list in a version-1 prompt-trim rule document."""
-    return {"version": 1, "rules": rules}
-
-
-def write_rules(directory: Path, rules: list[dict[str, Any]]) -> Path:
-    """Write a version-1 rule document into ``directory`` and return its path."""
-    path = Path(directory) / "prompt_rules.json"
-    path.write_text(json.dumps(rules_document(rules)), encoding="utf-8")
-    return path
 
 
 @pytest.fixture(scope="session")

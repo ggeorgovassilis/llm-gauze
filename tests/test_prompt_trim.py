@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 from app.remediation.prompt_trim import PromptTrimTransform, validate_rules
-from conftest import rules_document, write_rules
 from mock_upstream import settings_override
+from prompt_trim_support import rules_document, write_rules
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_RULES = REPO_ROOT / "config" / "prompt_rules.example.json"

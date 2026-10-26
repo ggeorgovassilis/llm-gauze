@@ -140,17 +140,15 @@ def test_kind_source_scan_handles_dict_constructor():
     assert _kinds_in_source(source) == {"flagged_malformed"}
 
 
-def test_kind_source_scan_ignores_unrelated_kind_keywords():
-    # Only the documented emitter constructors count; a ``kind=`` keyword on
-    # an unrelated call must not be mistaken for a change kind.
-    source = 'verdict = Verdict(kind="ghost_emitter")\nstate = Thing(kind="other")'
-    assert _kinds_in_source(source) == set()
-
-
 def test_kind_source_scan_allowlists_documented_emitters_only():
     # Pin both sides of the boundary in one mixed source: ``dict(kind=...)``
-    # is an emitter, an unrelated ``kind=`` call is not.
-    source = 'record = dict(kind="tool_overflow", index=0)\nverdict = Verdict(kind="ghost_emitter")'
+    # is an emitter, unrelated ``kind=`` calls are not, even when several of
+    # them appear alongside a real emitter.
+    source = (
+        'record = dict(kind="tool_overflow", index=0)\n'
+        'verdict = Verdict(kind="ghost_emitter")\n'
+        'state = Thing(kind="other")'
+    )
     assert _kinds_in_source(source) == {"tool_overflow"}
 
 
@@ -170,40 +168,54 @@ records = [{"kind": "tool_overflow"}]
     assert _kinds_in_source(source) == {"tool_overflow"}
 
 
-def test_documented_change_keys_locates_fields_column_from_header(monkeypatch, tmp_path):
+def _use_schema(monkeypatch, tmp_path, table: str) -> None:
+    """Point the guard at a temporary schema document containing ``table``."""
     schema = tmp_path / "record-schema.md"
-    schema.write_text(
-        "## Change records\n\n"
+    schema.write_text(f"## Change records\n\n{table}", encoding="utf-8")
+    monkeypatch.setattr(f"{__name__}.SCHEMA", schema)
+
+
+def test_documented_change_keys_locates_fields_column_from_header(monkeypatch, tmp_path):
+    _use_schema(
+        monkeypatch,
+        tmp_path,
         "| `kind` | Fields besides `kind` | Meaning | Emitted by |\n"
         "| --- | --- | --- | --- |\n"
         "| `example_kind` | `size`, `flag` | what | emitter |\n",
-        encoding="utf-8",
     )
-    monkeypatch.setattr(f"{__name__}.SCHEMA", schema)
     assert _documented_change_keys() == {"example_kind": {"size", "flag"}}
 
 
 def test_documented_change_keys_locates_kind_column_from_header(monkeypatch, tmp_path):
-    schema = tmp_path / "record-schema.md"
-    schema.write_text(
-        "## Change records\n\n"
+    _use_schema(
+        monkeypatch,
+        tmp_path,
         "| Meaning | `kind` | Emitted by | Fields besides `kind` |\n"
         "| --- | --- | --- | --- |\n"
         "| what | `example_kind` | emitter | `size`, `flag` |\n",
-        encoding="utf-8",
     )
-    monkeypatch.setattr(f"{__name__}.SCHEMA", schema)
     assert _documented_change_keys() == {"example_kind": {"size", "flag"}}
 
 
 def test_documented_change_keys_requires_fields_column(monkeypatch, tmp_path):
-    schema = tmp_path / "record-schema.md"
-    schema.write_text(
-        "## Change records\n\n| `kind` | Meaning |\n| --- | --- |\n| `example_kind` | what |\n",
-        encoding="utf-8",
+    _use_schema(
+        monkeypatch,
+        tmp_path,
+        "| `kind` | Meaning |\n| --- | --- |\n| `example_kind` | what |\n",
     )
-    monkeypatch.setattr(f"{__name__}.SCHEMA", schema)
     with pytest.raises(AssertionError, match=r"missing the 'Fields besides kind' column"):
+        _documented_change_keys()
+
+
+def test_documented_change_keys_requires_kind_column(monkeypatch, tmp_path):
+    _use_schema(
+        monkeypatch,
+        tmp_path,
+        "| Meaning | Fields besides `kind` | Emitted by |\n"
+        "| --- | --- | --- |\n"
+        "| what | `size` | emitter |\n",
+    )
+    with pytest.raises(AssertionError, match=r"missing the `kind` column"):
         _documented_change_keys()
 
 

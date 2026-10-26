@@ -299,7 +299,9 @@ the #153 dry-run and an A/B run before shipping.
    `prompt_trim` record entries and the `prompt_trim_rules_total{rule,action,mode}`
    counters for the expected 100% match rates. Recorded `request_body` remains
    the forwarded (post-trim) body; `chars_before` is the evidence of removal.
-5. **Re-validate on drift (#154).** Follow [Re-validation](#re-validation):
+5. **Re-validate on drift
+   ([#154](https://github.com/ggeorgovassilis/llm-gauze/issues/154)).** Follow
+   [Re-validation](#re-validation):
    capture a fresh corpus into a new, empty directory with the
    [#152](https://github.com/ggeorgovassilis/llm-gauze/issues/152) protocol,
    analyse that directory only, and compare the per-rule match rate and measured
@@ -325,7 +327,8 @@ Measured in [#152](https://github.com/ggeorgovassilis/llm-gauze/issues/152) on
 the corpus above (2,084 requests, five dated files, 13 conversations) with
 `config/prompt_rules.example.json`. The corpus was captured with prompt
 trimming off (`PROMPT_TRIM_ENABLED=false`, the default;
-[#152](https://github.com/ggeorgovassilis/llm-gauze/issues/152) predates #153).
+[#152](https://github.com/ggeorgovassilis/llm-gauze/issues/152) predates
+[#153](https://github.com/ggeorgovassilis/llm-gauze/issues/153)).
 That matters because the record holds the forwarded `request_body`, which is
 post-trim whenever trimming is applied and not in dry-run, so these baselines
 describe the client's text before any rule ran. A re-validation corpus must be
@@ -378,9 +381,13 @@ instead of treating the result as drift.
    `/data/revalidation-2026-10`, which maps to the host's
    `data/revalidation-2026-10`; keep `RECORD_FILE=records.jsonl`) and run the
    gateway with `RECORDING_ENABLED=true`. Keep prompt trimming off for the
-   capture: leave `PROMPT_TRIM_ENABLED=false` (the default), or set
-   `PROMPT_TRIM_DRY_RUN=true`, which records the would-be changes but forwards
-   the original body. Do not capture with `PROMPT_TRIM_ENABLED=true` and
+   capture: leave `PROMPT_TRIM_ENABLED=false` (the default). Alternatively set
+   `PROMPT_TRIM_ENABLED=true` with `PROMPT_TRIM_DRY_RUN=true`, which records
+   the would-be changes but forwards the original body. Dry-run alone records
+   nothing: with `PROMPT_TRIM_ENABLED=false` the transform is disabled and only
+   increments `prompt_trim_skipped_total{reason="disabled"}`, so an operator
+   looking for `prompt_trim` entries will not see any. Do not capture with
+   `PROMPT_TRIM_ENABLED=true` and
    `PROMPT_TRIM_DRY_RUN=false`: every record then holds an already-trimmed
    body, the analysis applies the rules to their own output, and the idempotent
    rules match nothing, so nearly every rule reports 0% — a false regression
@@ -390,10 +397,14 @@ instead of treating the result as drift.
    aggregated with the baseline and a rule that stopped matching could never
    cross the thresholds. Confirm the directory contains no `records-*.jsonl`
    before starting. Use VS Code/Copilot normally against the gateway. Rotation
-   happens only when the recorder starts, so restart the gateway once after the
-   last capture to rotate the final live `records.jsonl` into a dated
+   happens only when the recorder starts, so restart the gateway exactly once
+   after the last capture to rotate the final live `records.jsonl` into a dated
    `records-<stamp>.jsonl`; the live file itself is excluded and only the dated
-   files are read. Keep them local; `data/` is gitignored. The sample floor is
+   files are read. Do not restart again: the new live file is empty, and a
+   second restart rotates it into a zero-turn dated file that fails the
+   `sample_floor` check, because every dated file must contain a user turn. If a
+   zero-turn dated file was produced, remove it from the re-validation directory
+   before step 2. Keep them local; `data/` is gitignored. The sample floor is
    at least 100 forwarded requests over at least three dated files, each
    containing a user turn.
 2. **Confirm the sample before comparing.** Run the command with `--data-dir
@@ -425,7 +436,11 @@ instead of treating the result as drift.
    missing block as drift and continue to step 4; discard and recapture only
    when step 1's settings were not met. Do not infer the capture condition from
    `prompt_trim` entries — they record rule applications, not whether the
-   forwarded body was trimmed, and dry-run also writes them.
+   forwarded body was trimmed, and dry-run also writes them. This check only
+   sees the example block: drift confined to the
+   `discard-output-formatting-example` pattern while the other two rules still
+   apply leaves `<example>` in place, so treat the per-rule match rates in step
+   5 as the authoritative signal for that rule.
 4. **Run the committed analysis command** against the isolated directory (the
    same script and committed example rules as
    [#152](https://github.com/ggeorgovassilis/llm-gauze/issues/152)):

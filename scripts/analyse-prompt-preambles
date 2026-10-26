@@ -462,6 +462,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--rules", type=Path, default=DEFAULT_RULES)
     raw_argv = list(sys.argv[1:] if argv is None else argv)
+    program = sys.argv[0] if argv is None else "./scripts/analyse-prompt-preambles"
     args = parser.parse_args(argv)
 
     records, manifest = load_corpus(args.data_dir)
@@ -784,7 +785,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     report = {
-        "command": shlex.join(["./scripts/analyse-prompt-preambles", *raw_argv]),
+        "command": shlex.join([program, *raw_argv]),
         "corpus": {
             "data_dir": str(args.data_dir),
             "files": manifest,

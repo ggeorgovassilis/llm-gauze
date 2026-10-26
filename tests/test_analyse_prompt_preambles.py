@@ -9,6 +9,8 @@ percentile, shared-prefix, taxonomy, sample-floor and saving calculations.
 from __future__ import annotations
 
 import json
+import shlex
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -280,6 +282,39 @@ def test_report_command_echoes_the_actual_arguments(
     assert analysis.main(["--data-dir", str(tmp_path), "--rules", str(RULES_PATH)]) == 0
     report = json.loads(capsys.readouterr().out)
 
-    assert report["command"] == (
-        f"./scripts/analyse-prompt-preambles --data-dir {tmp_path} --rules {RULES_PATH}"
+    assert report["command"] == shlex.join(
+        [
+            "./scripts/analyse-prompt-preambles",
+            "--data-dir",
+            str(tmp_path),
+            "--rules",
+            str(RULES_PATH),
+        ]
     )
+
+
+def test_report_command_uses_the_invoked_program_name(
+    analysis: Any,
+    copilot_body: dict[str, Any],
+    make_record: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_corpus(
+        tmp_path,
+        {"records-20260101-000000.jsonl": [make_record("r1", copilot_body)]},
+    )
+    argv = [
+        "./scripts/analyse-prompt-preambles",
+        "--data-dir",
+        str(tmp_path),
+        "--rules",
+        str(RULES_PATH),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert analysis.main() == 0
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["command"] == shlex.join(argv)

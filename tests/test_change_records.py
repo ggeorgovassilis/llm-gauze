@@ -10,7 +10,6 @@ import ast
 import asyncio
 import json
 import re
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,30 +29,33 @@ GENERIC_CHANGE_KEYS = {"index", "role"}
 def _documented_change_keys() -> dict[str, set[str]]:
     """Parse the per-kind table from the change-record schema section.
 
-    The kind-specific column is located by its header rather than by position,
-    so adding or reordering columns in the schema does not silently make the
-    guard parse the wrong cell.
+    Both the ``kind`` column and the "Fields besides ``kind``" column are
+    located by their header rather than by position, so adding or reordering
+    columns in the schema does not silently make the guard parse the wrong
+    cell. A table without those columns fails loudly instead of appearing to
+    document no fields at all.
     """
     text = SCHEMA.read_text(encoding="utf-8")
     section = text.split("## Change records", 1)[1].split("\n## ", 1)[0]
     documented: dict[str, set[str]] = {}
-    fields_column: int | None = None
+    columns: dict[str, int] | None = None
     for line in section.splitlines():
         if not line.startswith("|"):
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if fields_column is None:
-            if "Fields besides kind" in (cell.replace("`", "") for cell in cells):
-                fields_column = next(
-                    index
-                    for index, cell in enumerate(cells)
-                    if cell.replace("`", "") == "Fields besides kind"
-                )
+        headers = [cell.replace("`", "") for cell in cells]
+        if columns is None:
+            if "Fields besides kind" in headers:
+                assert "kind" in headers, "change-record schema table is missing the `kind` column"
+                columns = {name: headers.index(name) for name in ("kind", "Fields besides kind")}
             continue
         if all(re.fullmatch(r":?-+:?", cell) for cell in cells):
             continue
-        kind = cells[0].strip("`")
-        documented[kind] = set(re.findall(r"`([a-z0-9_]+)`", cells[fields_column]))
+        kind = cells[columns["kind"]].strip("`")
+        documented[kind] = set(re.findall(r"`([a-z0-9_]+)`", cells[columns["Fields besides kind"]]))
+    assert columns is not None, (
+        "change-record schema table is missing the 'Fields besides kind' column"
+    )
     return documented
 
 
@@ -145,6 +147,13 @@ def test_kind_source_scan_ignores_unrelated_kind_keywords():
     assert _kinds_in_source(source) == set()
 
 
+def test_kind_source_scan_allowlists_documented_emitters_only():
+    # Pin both sides of the boundary in one mixed source: ``dict(kind=...)``
+    # is an emitter, an unrelated ``kind=`` call is not.
+    source = 'record = dict(kind="tool_overflow", index=0)\nverdict = Verdict(kind="ghost_emitter")'
+    assert _kinds_in_source(source) == {"tool_overflow"}
+
+
 def test_kind_source_scan_cannot_resolve_variable_kinds():
     # Documented limitation: the scan only sees literal kind values.
     source = 'kind = "tool_overflow"\nrecord = {"kind": kind}'
@@ -170,8 +179,32 @@ def test_documented_change_keys_locates_fields_column_from_header(monkeypatch, t
         "| `example_kind` | `size`, `flag` | what | emitter |\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(sys.modules[__name__], "SCHEMA", schema)
+    monkeypatch.setattr(f"{__name__}.SCHEMA", schema)
     assert _documented_change_keys() == {"example_kind": {"size", "flag"}}
+
+
+def test_documented_change_keys_locates_kind_column_from_header(monkeypatch, tmp_path):
+    schema = tmp_path / "record-schema.md"
+    schema.write_text(
+        "## Change records\n\n"
+        "| Meaning | `kind` | Emitted by | Fields besides `kind` |\n"
+        "| --- | --- | --- | --- |\n"
+        "| what | `example_kind` | emitter | `size`, `flag` |\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(f"{__name__}.SCHEMA", schema)
+    assert _documented_change_keys() == {"example_kind": {"size", "flag"}}
+
+
+def test_documented_change_keys_requires_fields_column(monkeypatch, tmp_path):
+    schema = tmp_path / "record-schema.md"
+    schema.write_text(
+        "## Change records\n\n| `kind` | Meaning |\n| --- | --- |\n| `example_kind` | what |\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(f"{__name__}.SCHEMA", schema)
+    with pytest.raises(AssertionError, match=r"missing the 'Fields besides kind' column"):
+        _documented_change_keys()
 
 
 def test_assert_documented_rejects_undocumented_kind():

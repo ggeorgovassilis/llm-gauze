@@ -27,6 +27,8 @@ services:
       # Mount source for fast iteration; data for host-visible recording.
       - ./source:/app
       - ./data:/data
+      # Operator-supplied prompt-trim rules, read-only in the container.
+      - ./config:/app/config:ro
     restart: unless-stopped
 
   # Test image + suite: the same environment CI runs (Option 3, docker all the

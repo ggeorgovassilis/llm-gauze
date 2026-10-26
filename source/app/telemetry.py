@@ -53,6 +53,14 @@ _METRICS = {
         "counter",
         "Remediation ladders stopped by the whole-ladder wall-clock cap.",
     ),
+    "prompt_trim_rules_total": (
+        "counter",
+        "Request-side prompt-trim rule applications, by rule, action and mode.",
+    ),
+    "prompt_trim_skipped_total": (
+        "counter",
+        "Prompt-trim runs skipped, by reason.",
+    ),
     "upstream_latency_seconds": ("histogram", "Upstream response latency."),
     "upstream_down": ("gauge", "Whether the upstream is currently failing."),
 }

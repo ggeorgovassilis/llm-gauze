@@ -156,6 +156,16 @@ below, grouped by feature, with its default.
 | `MESSAGE_OVERFLOW_TRUNCATE` | `true` | Truncate oversized tool results to a bounded prefix. |
 | `MESSAGE_OVERFLOW_WARNING` | `This tool result is very large and may exceed the model's context window; the full result may have been truncated. Find a workaround rather than relying on the complete result.` | Warning text prepended to an oversized tool result. |
 
+## Prompt trimming
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PROMPT_TRIM_ENABLED` | `false` | Master switch for request-side prompt trimming (opt-in; rewriting prompts is a quality risk). |
+| `PROMPT_TRIM_RULES_FILE` | `` | Path to the JSON prompt-trim rule file; empty or unreadable disables trimming. |
+| `PROMPT_TRIM_DRY_RUN` | `false` | Evaluate prompt-trim rules, record would-be changes, and forward the original request body. |
+| `PROMPT_TRIM_MAX_SCAN_CHARS` | `200000` | Per-message character bound for regex matching; longer messages are not matched. Bounds, but does not eliminate, regex work (avoid catastrophic backtracking). |
+| `PROMPT_TRIM_TRUNCATE_MARKER` | `... [trimmed]` | Marker appended by a `truncate` action; it counts within the rule's `chars` bound. |
+
 ## Tool-call syntax enforcement
 
 | Variable | Default | Description |

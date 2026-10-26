@@ -131,6 +131,39 @@ with `Accept: application/json`).
 
 Every setting is documented in [`docs/configuration.md`](docs/configuration.md).
 
+### Prompt trimming (opt-in)
+
+The client preamble is re-sent every turn and can crowd out the user's task on
+a small-context model. llm-gauze can rewrite `messages[*].content` before
+forwarding using an operator-supplied rule file. It is **off by default**
+because changing prompt text changes model behaviour.
+
+1. Copy the starter rules and edit them:
+
+   ```bash
+   cp config/prompt_rules.example.json config/prompt_rules.json
+   ```
+
+   `config/prompt_rules.json` is gitignored; both compose files mount
+   `./config` read-only at `/app/config`.
+
+2. Enable it in `.env`:
+
+   ```bash
+   PROMPT_TRIM_ENABLED=true
+   PROMPT_TRIM_RULES_FILE=config/prompt_rules.json
+   ```
+
+3. Start with `PROMPT_TRIM_DRY_RUN=true` to record the would-be `prompt_trim`
+   changes in `data/records.jsonl` while forwarding every request unchanged,
+   then turn dry-run off once the rule set is validated. An empty, unreadable
+   or invalid rule file logs one `ERROR`, disables trimming, and keeps serving
+   requests.
+
+See [`docs/architecture.md`](docs/architecture.md#prompt-trimming) for the rule
+language, safety invariants and its order relative to the message-overflow
+guard.
+
 ## How it works
 
 llm-gauze sits between your client and the local LLM, recording every exchange:

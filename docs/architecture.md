@@ -83,8 +83,9 @@ proxy walks the ladder in order and re-submits via the first rung whose
 `applies` fires; when no rung fires the outcome is final. A new remediation is
 therefore "implement and register" (append a `Remediation` subclass to the
 ladder), not "edit the loop". `Transform` classes (`ThinkContentGuard`,
-`ToolCallGuard`, `MessageOverflowGuard`) share a sibling protocol: a canonical
-`apply` that rewrites a value and reports its mutations, never re-submitting.
+`ToolCallGuard`, `MessageOverflowGuard`, `PromptTrimTransform`) share a sibling
+protocol: a canonical `apply` that rewrites a value and reports its mutations,
+never re-submitting.
 
 The whole ladder is also bounded by two per-request caps — `max_remediation_rounds`
 re-submissions across all rungs and a `max_remediation_seconds` wall-clock
@@ -114,6 +115,9 @@ not change the "implement and register" contract.
 - `app/remediation/overflow.py` — `MessageOverflowGuard`, a request-side
   *transform* that warns/truncates oversized tool results (distinct from
   `context.py`'s response-side `ContextWindowDetector`).
+- `app/remediation/prompt_trim.py` — `PromptTrimTransform`, an opt-in,
+  rule-driven request-side *transform* that rewrites `messages[*].content`
+  from an operator-supplied JSON rule file.
 - `app/remediation/extract.py` — `ExtractionPolicy`, recover a visible answer
   from a turn that finished empty (reasoning only, no content, no tool calls)
   by paging through the reasoning via the configured read tool
@@ -537,6 +541,61 @@ upstream's *response-side* "context filled" error. Message overflow runs
 The master switch is `MESSAGE_OVERFLOW_ENABLED`.
 
 
+## Prompt trimming
+
+The client preamble is re-sent every turn and competes with the user's task on
+a small-context local model. Prompt trimming rewrites `messages[*].content`
+*before* the request is forwarded, using an operator-supplied rule file, so the
+reduction is shareable, observable and reversible instead of a hand-edited
+client prompt. It is **opt-in** (`PROMPT_TRIM_ENABLED`, default `false`):
+rewriting prompt text changes model behaviour and is a quality risk.
+
+- `PromptTrimTransform.from_settings()` loads and validates
+  `PROMPT_TRIM_RULES_FILE` once at startup and builds a `Transform`. The proxy
+  constructs it with the rest of its startup state; rules are not re-read per
+  request.
+- The rule language is stdlib JSON: `version: 1`, plus an ordered `rules` list
+  of `{id, when, then}` objects. `when` matches `role` (string or list),
+  `content_regex` (`re.search`) and optional `min_chars`; only string content
+  is matched. `then.action` is one of `drop`, `replace`, `sub` or `truncate`.
+  `sub` and `truncate` compose in file order; `drop` and `replace` are terminal
+  for that message. See `config/prompt_rules.example.json` for the starter set.
+- Load-time validation rejects duplicate ids, unknown actions, uncompilable
+  regexes, missing per-action fields, and non-idempotent `replace`/`sub` rules
+  (a rule whose own output would match it again). `truncate` is always
+  idempotent: a message that already fits the bound is left untouched, and a
+  truncated result is within the bound, so re-applying it is a no-op. An empty,
+  unreadable or invalid file logs one `ERROR`, disables trimming, and leaves
+  requests served.
+- Evaluation is deterministic: no timestamps, ids, sizes or random content are
+  inserted. The same `(body, rules)` pair produces byte-identical output across
+  turns and restarts, so the retained prefix stays cacheable.
+- Only string `messages[*].content` is rewritten. The guard never empties the
+  `messages` list, never drops the last `user` message, and skips a `drop` that
+  would orphan a tool call or a tool result. `tools`, `functions`,
+  `tool_choice` and every other non-`messages` key are untouched.
+- `PROMPT_TRIM_DRY_RUN` evaluates the rules and records the would-be change
+  list while forwarding the original body. `PROMPT_TRIM_MAX_SCAN_CHARS` bounds
+  per-message regex work (`re` has no timeout; oversized messages are not
+  matched and count as `scan_bound` skips). This bounds, but does not
+  eliminate, the residual ReDoS risk — rule regexes must avoid catastrophic
+  backtracking. `PROMPT_TRIM_TRUNCATE_MARKER` is counted within a `truncate`
+  rule's `chars` bound; a message that already fits within the bound is left
+  unchanged and no change record is written (a trim never grows a message).
+- Records carry a `prompt_trim` list of `prompt_trim` changes (or `null`);
+  telemetry counts `prompt_trim_rules_total{rule,action,mode}` and
+  `prompt_trim_skipped_total{reason}`. Each application logs one `DEBUG` line
+  with ids and sizes only — never prompt text.
+
+**Order relative to `MessageOverflowGuard`.** In `Proxy.forward`, for a chat
+completion, prompt trimming runs first on the request body, then
+`MessageOverflowGuard` runs over the trimmed result. The overflow guard
+therefore sees exactly what the model will see, and a prompt rule that shortens
+a message can prevent an overflow warning. Both transforms report their own
+change lists on the same record (`prompt_trim` and `message_overflow`); the
+recorded `request_body` is the forwarded, post-trim body.
+
+
 ## Timeout model
 
 A single request timeout is not enough: the same value applied to *connecting*
@@ -577,6 +636,6 @@ JSONL store is the shared substrate every subsequent phase reads from.
    backoff, separated into collection/understanding/action. ✅
 3. **Detection** — analyse recorded exchanges, classify further failures. ✅
 4. **Remediation** — loop/context/message-overflow/coast/runaway detection and
-   the extraction/think-cleanup/tool-repair transforms. ✅
+   the extraction/think-cleanup/tool-repair/prompt-trim transforms. ✅
 5. **Streaming** — SSE pass-through, per-chunk handling, and rebuilt streams
    after a transform. ✅

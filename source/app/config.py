@@ -696,6 +696,49 @@ class Settings(BaseSettings):
         "Message overflow",
     )
 
+    # --- Prompt trimming (opt-in request-side preamble rewrite) ------
+    # Master switch for the rule-driven prompt trimmer. Off by default:
+    # rewriting prompt text changes model behaviour and is a quality risk.
+    prompt_trim_enabled: bool = _field(
+        False,
+        "Master switch for request-side prompt trimming (opt-in; rewriting prompts is a quality risk).",
+        "Prompt trimming",
+    )
+
+    # Path to the operator-supplied JSON rule file. Empty or unreadable while
+    # trimming is enabled logs an error and disables trimming, matching an
+    # invalid file.
+    prompt_trim_rules_file: str = _field(
+        "",
+        "Path to the JSON prompt-trim rule file; empty or unreadable disables trimming.",
+        "Prompt trimming",
+    )
+
+    # Dry run: evaluate every rule and record the would-be changes, but forward
+    # the original request body unchanged. The safe first deployment step.
+    prompt_trim_dry_run: bool = _field(
+        False,
+        "Evaluate prompt-trim rules, record would-be changes, and forward the original request body.",
+        "Prompt trimming",
+    )
+
+    # Bound on the characters scanned per message. ``re`` has no timeout, so
+    # this caps regex work; longer messages are not matched at all.
+    prompt_trim_max_scan_chars: int = _field(
+        200000,
+        "Per-message character bound for regex matching; longer messages are not matched. Bounds, but does not eliminate, regex work (avoid catastrophic backtracking).",
+        "Prompt trimming",
+        gt=0,
+    )
+
+    # Marker appended by a ``truncate`` action. It counts within the rule's
+    # ``chars`` bound, so the rewritten content never exceeds that bound.
+    prompt_trim_truncate_marker: str = _field(
+        "... [trimmed]",
+        "Marker appended by a `truncate` action; it counts within the rule's `chars` bound.",
+        "Prompt trimming",
+    )
+
     # --- Tool-call syntax enforcement --------------------------------
     # Master switch for validating assembled tool calls: repair truncated
     # ``function.arguments`` where deterministic, flag the rest without

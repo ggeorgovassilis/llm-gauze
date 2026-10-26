@@ -9,6 +9,8 @@ percentile, shared-prefix, taxonomy, sample-floor and saving calculations.
 from __future__ import annotations
 
 import json
+import shlex
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -257,3 +259,62 @@ def test_preamble_share_after_uses_the_trimmed_body(
     assert "preamble_share_of_body_after" not in saving
     assert saving["preamble_share_of_trimmed_body_after"]["median"] == pytest.approx(expected)
     assert saving["preamble_chars_after"]["median"] == len(trimmed_system)
+
+    # Pin the field the re-validation thresholds compare. One match removed
+    # 25 characters: len("KEEP<example>REMOVE</example>") - len("KEEP").
+    rule = report["rules"][0]
+    assert rule["id"] == "drop-example"
+    assert rule["median_chars_saved_per_matched_request"] == 25
+
+
+def test_report_command_echoes_the_actual_arguments(
+    analysis: Any,
+    copilot_body: dict[str, Any],
+    make_record: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_corpus(
+        tmp_path,
+        {"records-20260101-000000.jsonl": [make_record("r1", copilot_body)]},
+    )
+
+    assert analysis.main(["--data-dir", str(tmp_path), "--rules", str(RULES_PATH)]) == 0
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["command"] == shlex.join(
+        [
+            "./scripts/analyse-prompt-preambles",
+            "--data-dir",
+            str(tmp_path),
+            "--rules",
+            str(RULES_PATH),
+        ]
+    )
+
+
+def test_report_command_uses_the_invoked_program_name(
+    analysis: Any,
+    copilot_body: dict[str, Any],
+    make_record: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_corpus(
+        tmp_path,
+        {"records-20260101-000000.jsonl": [make_record("r1", copilot_body)]},
+    )
+    argv = [
+        "./scripts/analyse-prompt-preambles",
+        "--data-dir",
+        str(tmp_path),
+        "--rules",
+        str(RULES_PATH),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert analysis.main() == 0
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["command"] == shlex.join(argv)

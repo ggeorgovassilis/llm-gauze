@@ -299,29 +299,221 @@ the #153 dry-run and an A/B run before shipping.
    `prompt_trim` record entries and the `prompt_trim_rules_total{rule,action,mode}`
    counters for the expected 100% match rates. Recorded `request_body` remains
    the forwarded (post-trim) body; `chars_before` is the evidence of removal.
-5. **Re-validate on drift (#154).** Capture a fresh corpus with the same
-   collection protocol (at least 100 forwarded requests over at least three
-   `records-*.jsonl` files, each containing a user turn; exclude the live
-   `records.jsonl`), run the same command, and compare the per-rule match rate
-   and measured saving with this baseline. #154 owns the threshold; its starting
-   rule is a regression when a match rate falls below 50% of baseline or the
-   measured saving falls below half. File a follow-up ticket to update or retire
-   a stale rule; do not edit it silently.
+5. **Re-validate on drift
+   ([#154](https://github.com/ggeorgovassilis/llm-gauze/issues/154)).** Follow
+   [Re-validation](#re-validation):
+   capture a fresh corpus into a new, empty directory with the
+   [#152](https://github.com/ggeorgovassilis/llm-gauze/issues/152) protocol,
+   analyse that directory only, and compare the per-rule match rate and measured
+   saving with the baseline. File a follow-up ticket to update or retire a stale
+   rule; do not edit it silently.
 6. **Quality check before enabling.** #153 should compare a small representative
    sample with trimming off/on (and with the identity rule alone) on the local
    model. The corpus proves the size and recurrence, not the answer quality.
 
-## Baseline for #154
+## Re-validation
 
-| Rule id | Baseline match rate | Baseline median saving / request |
+The rules match text produced by another product. A VS Code/Copilot update can
+change the preamble wording and every rule silently stops matching, so context
+is consumed as before and nothing alerts. This is the standing procedure for
+[#154](https://github.com/ggeorgovassilis/llm-gauze/issues/154): it reuses the
+[#152](https://github.com/ggeorgovassilis/llm-gauze/issues/152) corpus protocol
+and the committed analysis command. It adds no code; the
+script already emits every metric the thresholds compare.
+
+### Baseline
+
+Measured in [#152](https://github.com/ggeorgovassilis/llm-gauze/issues/152) on
+the corpus above (2,084 requests, five dated files, 13 conversations) with
+`config/prompt_rules.example.json`. The corpus was captured with prompt
+trimming off (`PROMPT_TRIM_ENABLED=false`, the default;
+[#152](https://github.com/ggeorgovassilis/llm-gauze/issues/152) predates
+[#153](https://github.com/ggeorgovassilis/llm-gauze/issues/153)).
+That matters because the record holds the forwarded `request_body`, which is
+post-trim whenever trimming is applied and not in dry-run, so these baselines
+describe the client's text before any rule ran. A re-validation corpus must be
+captured under the same condition (step 1) or it is not comparable.
+
+| Rule id | Baseline match rate | Baseline median saved / match |
 | --- | ---: | ---: |
 | `replace-identity-policy` | 100% (2,084 / 2,084) | 243 chars |
 | `compact-output-formatting-tail` | 100% (2,084 / 2,084) | 115 chars |
 | `discard-output-formatting-example` | 100% (2,084 / 2,084) | 195 chars |
 
-The aggregate baseline is 553 characters per request, 4.11% of the request body
-and 7.07% of message content. These are the values #154 should compare against
-when the client prompt composition changes.
+The aggregate baseline is **553 content characters per request** (p95 553),
+**4.11%** of the request body and **7.07%** of message content. The preamble
+falls from 6,952 to 6,399 characters (median) and the stable prefix from 7,006
+to 6,453. Per-rule totals and the full saving table are in
+[Starter rule set](#starter-rule-set) and [Measured saving](#measured-saving).
+
+### Regression thresholds
+
+A result is a regression when a row falls below its threshold:
+
+| Signal | Baseline | Regression when below |
+| --- | ---: | ---: |
+| `replace-identity-policy` match rate | 100% | 50% |
+| `compact-output-formatting-tail` match rate | 100% | 50% |
+| `discard-output-formatting-example` match rate | 100% | 50% |
+| `replace-identity-policy` median saved / match | 243 chars | 121.5 chars |
+| `compact-output-formatting-tail` median saved / match | 115 chars | 57.5 chars |
+| `discard-output-formatting-example` median saved / match | 195 chars | 97.5 chars |
+| Aggregate median content saved / request | 553 chars | 276.5 chars |
+| Median share of request body saved | 4.11% | 2.055% |
+| Median share of message content saved | 7.07% | 3.535% |
+
+The thresholds are proportional (half the baseline): compare rates and medians,
+not raw match counts, because a re-validation corpus can be smaller. Any single
+row crossing its threshold is a regression for that rule. The common case is a
+rule that stops matching entirely: its match rate falls to 0% and the aggregate
+saving loses that rule's contribution.
+
+A run is only comparable when `saving.idempotent` is `true` and
+`rule_validation.errors` is empty. If either check fails, file a bug ticket
+instead of treating the result as drift.
+
+### Procedure
+
+1. **Capture a fresh corpus with the
+   [#152](https://github.com/ggeorgovassilis/llm-gauze/issues/152) protocol
+   into an isolated directory.**
+   Point `DATA_DIR` at a new, empty directory for this run (in the container
+   `/data/revalidation-2026-10`, which maps to the host's
+   `data/revalidation-2026-10`; keep `RECORD_FILE=records.jsonl`) and run the
+   gateway with `RECORDING_ENABLED=true`. Keep prompt trimming off for the
+   capture: leave `PROMPT_TRIM_ENABLED=false` (the default). Alternatively set
+   `PROMPT_TRIM_ENABLED=true` with `PROMPT_TRIM_DRY_RUN=true`, which records
+   the would-be changes but forwards the original body. Dry-run alone records
+   nothing: with `PROMPT_TRIM_ENABLED=false` the transform is disabled and only
+   increments `prompt_trim_skipped_total{reason="disabled"}`, so an operator
+   looking for `prompt_trim` entries will not see any. Do not capture with
+   `PROMPT_TRIM_ENABLED=true` and
+   `PROMPT_TRIM_DRY_RUN=false`: every record then holds an already-trimmed
+   body, the analysis applies the rules to their own output, and the idempotent
+   rules match nothing, so nearly every rule reports 0% — a false regression
+   that is not drift. Do not reuse `data/`: it
+   still holds the five baseline `records-*.jsonl` files, and the script reads
+   every matching file in the supplied directory, so fresh traffic would be
+   aggregated with the baseline and a rule that stopped matching could never
+   cross the thresholds. Confirm the directory contains no `records-*.jsonl`
+   before starting. Use VS Code/Copilot normally against the gateway. Rotation
+   happens only when the recorder starts, so restart the gateway exactly once
+   after the last capture to rotate the final live `records.jsonl` into a dated
+   `records-<stamp>.jsonl`; the live file itself is excluded and only the dated
+   files are read. Do not restart again: the new live file is empty, and a
+   second restart rotates it into a zero-turn dated file that fails the
+   `sample_floor` check, because every dated file must contain a user turn. If a
+   zero-turn dated file was produced, remove it from the re-validation directory
+   before step 2. Keep them local; `data/` is gitignored. The sample floor is
+   at least 100 forwarded requests over at least three dated files, each
+   containing a user turn.
+2. **Confirm the sample before comparing.** Run the command with `--data-dir
+   <isolated dir>` and check that `corpus.sample_floor.met` is `true`. Confirm
+   `corpus.files` lists only this run's dated snapshots (no baseline file
+   names) and that `corpus.totals.requests` matches the number of requests
+   captured — use the `requests_total` increase over the capture window, or the
+   gateway log, as the source for that count. `corpus.data_dir` echoes the
+   directory that was read. Note the file hashes so the run is reproducible. A
+   corpus below the floor, or one that includes baseline files, is not
+   comparable.
+3. **Confirm the capture was untrimmed.** Before trusting any match rate, check
+   a chat-completion record and verify that its system `request_body` still
+   carries the `<example>` block that `discard-output-formatting-example`
+   targets. The committed set applies all three rules, so its presence also
+   shows that the identity and formatting-tail rules had not run. Counting
+   marker occurrences keeps prompt text off the terminal and out of the
+   report:
+
+   ```bash
+   jq -r '.request_body | fromjson? | .messages[]? | select(.role == "system") | .content' \
+     data/revalidation-2026-10/records-*.jsonl | grep -c '<example>'
+   ```
+
+   A count near zero can mean either that the corpus was captured with trimming
+   applied or that the client no longer emits the block. First confirm step 1's
+   capture settings. If the capture ran with `PROMPT_TRIM_ENABLED=false` or
+   `PROMPT_TRIM_DRY_RUN=true` and the count is still near zero, treat the
+   missing block as drift and continue to step 4; discard and recapture only
+   when step 1's settings were not met. Do not infer the capture condition from
+   `prompt_trim` entries — they record rule applications, not whether the
+   forwarded body was trimmed, and dry-run also writes them. This check only
+   sees the example block: drift confined to the
+   `discard-output-formatting-example` pattern while the other two rules still
+   apply leaves `<example>` in place, so treat the per-rule match rates in step
+   5 as the authoritative signal for that rule.
+4. **Run the committed analysis command** against the isolated directory (the
+   same script and committed example rules as
+   [#152](https://github.com/ggeorgovassilis/llm-gauze/issues/152)):
+
+   ```bash
+   ./scripts/analyse-prompt-preambles --data-dir data/revalidation-2026-10
+   ```
+
+   Replace the directory with the one from step 1. It is read-only, reads only
+   the dated `records-*.jsonl` files in that directory (never the live
+   `records.jsonl`), prints aggregates only and never emits prompt text. Use
+   `--rules` only to check a different deployed rule file, and say so in the
+   result, because the baselines above are for the committed example set.
+5. **Compare per-rule results.** For each entry in `rules`, read `match_rate`
+   and `median_chars_saved_per_matched_request` and check them against the
+   threshold table. Check `matched_requests` too when the corpus size changed.
+6. **Compare the aggregate saving.** In `saving`, read
+   `content_chars_saved.median`, `share_of_request_body.median` and
+   `share_of_message_content.median`. The p95 values are informative but are
+   not thresholds.
+7. **Act on a crossed threshold.** File a new follow-up ticket to update or
+   retire the stale rule. Include the rule id, baseline versus observed match
+   rate and saving, the command, the gateway commit and the corpus manifest
+   (file hashes and counts); include no prompt text. Do not edit the rule or
+   this baseline silently: the follow-up ticket owns the fix and the refreshed
+   baseline. Retire a rule outright when the client no longer emits the block.
+8. **Record a clean run.** If no threshold is crossed, note the date, gateway
+   commit, corpus manifest and outcome (for example as a comment on the
+   re-validation ticket). No rule or baseline change is needed.
+
+If the committed script cannot answer a comparison this procedure needs, that is
+a separate tooling ticket; do not add ad-hoc code as part of a re-validation.
+
+### When to run
+
+- After any VS Code/Copilot update that changes prompt composition: release
+  notes about the system prompt, instructions, tools, agents or modes, or the
+  first recorded requests showing new, renamed or reworded preamble blocks.
+- Otherwise periodically: at least once a quarter, and whenever the runtime
+  signals below show that a rule has stopped matching.
+
+The runtime signals are an early warning, not a substitute: they show a drop on
+live traffic, while this procedure measures it against the corpus baseline.
+
+### Runtime signals
+
+The runtime already exposes these signals; none needs new code.
+
+- `prompt_trim_skipped_total{reason}` counts skipped-trim events. `reason` is
+  `disabled` (trimming off by configuration) or `invalid_rules` (the rule file
+  failed to load or validate), incremented once per affected request; or
+  `scan_bound`, incremented once per message skipped because it exceeded the
+  per-message scan limit, so a partial run contributes skipped messages rather
+  than requests. Check it first: a nonzero `disabled` or `invalid_rules` rate
+  means trimming is off, while `scan_bound` means it was only partly applied,
+  so flat rule counters do not indicate drift.
+- `prompt_trim_rules_total{rule,action,mode}` increments once per rule
+  application; `mode` is `apply` or `dry_run`. If a rule stops matching, its
+  series stays flat while requests continue. The counter has no request
+  denominator, so divide its increase over an interval by the increase in
+  `requests_total` over the same interval to estimate the observed match rate.
+  Treat that ratio as an estimate: `requests_total` also counts
+  non-chat-completion routes. Use the corpus match rate for the threshold
+  comparison.
+- Each recorded exchange carries `prompt_trim`: a list with one entry per
+  application, or `null` when no rule applied (including when trimming is
+  disabled). Each entry has `rule`, `action`, `index`, `role`, `chars_before`
+  and `chars_after`. A rule id disappearing from records that used to carry it
+  is the same drop; `chars_before - chars_after` is that application's saving.
+  Dry-run records the entries without changing the forwarded body, which makes
+  it the safest way to watch for drift.
+
+Stale rules are retired or updated through a new ticket, never edited silently.
 
 ## Limitations
 

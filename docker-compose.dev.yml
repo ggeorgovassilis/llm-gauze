@@ -49,4 +49,5 @@ services:
       - ./tests:/app/tests
       - ./.env.example:/app/.env.example
       - ./docs:/app/docs
+      - ./config:/app/config
     command: pytest

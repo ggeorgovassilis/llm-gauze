@@ -7,5 +7,5 @@ cd "$(dirname "$0")/.."
 
 docker compose -f docker-compose.dev.yml build test
 docker compose -f docker-compose.dev.yml run --rm test \
-    bash -c 'ruff check source tests && ruff format --check source tests && mypy source && pytest "$@"' \
+    bash -c 'ruff check source tests scripts/analyse-prompt-preambles && ruff format --check source tests scripts/analyse-prompt-preambles && mypy source scripts/analyse-prompt-preambles && pytest "$@"' \
     -- "$@"

@@ -28,13 +28,13 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Lint (ruff check)
-        run: docker run --rm llm-gauze:test ruff check source tests
+        run: docker run --rm llm-gauze:test ruff check source tests scripts/analyse-prompt-preambles
 
       - name: Format check (ruff format)
-        run: docker run --rm llm-gauze:test ruff format --check source tests
+        run: docker run --rm llm-gauze:test ruff format --check source tests scripts/analyse-prompt-preambles
 
       - name: Type check (mypy)
-        run: docker run --rm llm-gauze:test mypy source
+        run: docker run --rm llm-gauze:test mypy source scripts/analyse-prompt-preambles
 
   test:
     name: Test (Docker)

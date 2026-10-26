@@ -1,0 +1,865 @@
+#!/usr/bin/env python3
+"""Measure Copilot client prompt preambles and the starter trimming rules.
+
+Read-only analysis over the dated ``data/records-*.jsonl`` corpus.  It prints
+aggregates only: sizes, frequencies, hashes and match rates.  Prompt text is
+never written to stdout.
+
+The command is the reproducibility contract for
+``docs/prompt-trimming-analysis.md``::
+
+    ./scripts/analyse-prompt-preambles --data-dir data
+
+The live ``data/records.jsonl`` file is deliberately excluded.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import hashlib
+import json
+import math
+import re
+import statistics
+import sys
+from collections import Counter, defaultdict
+from pathlib import Path
+from typing import Any, Iterable
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DATA_DIR = REPO_ROOT / "data"
+DEFAULT_RULES = REPO_ROOT / "config" / "prompt_rules.example.json"
+
+CLOSING_TAGS = (
+    "</instructions>",
+    "</toolUseInstructions>",
+    "</outputFormatting>",
+    "</modeInstructions>",
+)
+
+UUID_RE = re.compile(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
+HEX_RE = re.compile(r"(?i)\b[0-9a-f]{16,}\b")
+
+#: Human-readable purpose labels for the taxonomy.  They describe the block's
+#: role, never its wording.
+PURPOSES = {
+    "system.identity": "Agent identity, self-description, content policy and tone.",
+    "system.instructions": "Base coding-agent planning and tool-use behaviour.",
+    "system.tool_use": "Tool-call schema, parallelism and path rules.",
+    "system.output_formatting": "Markdown/KaTeX/Mermaid presentation rules.",
+    "system.output_formatting.example": "Illustrative output snippets.",
+    "system.agents_catalog": "Available subagents and their descriptions.",
+    "system.skills_catalog": "Available skills and their file locations.",
+    "system.mode_instructions": "Active mode's workflow and tool sequence.",
+    "system.completion_instruction": "Instruction to call the terminal task-completion tool.",
+    "system.template_variables": "Per-session template variables for placeholder substitution.",
+    "user.environment": "Operating-system context.",
+    "user.workspace": "Workspace folder context.",
+    "user.context": "Current-date context.",
+    "user.reminder": "User reminder instructions.",
+    "user.request": "The user's task and attached context.",
+    "user.editor_context": "Editor selection/context.",
+    "request.tools": "Tool JSON schemas sent alongside the messages.",
+    "conversation.history": "Prior assistant/tool/user turn history.",
+}
+
+
+def percentile(values: Iterable[float], pct: float) -> float:
+    """Nearest-rank percentile (deterministic, no interpolation)."""
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    rank = max(1, math.ceil(pct / 100.0 * len(ordered)))
+    return ordered[min(len(ordered) - 1, rank - 1)]
+
+
+def summary(values: Iterable[float]) -> dict[str, Any]:
+    ordered = sorted(values)
+    if not ordered:
+        return {"count": 0, "median": 0, "p95": 0, "mean": 0, "min": 0, "max": 0}
+    return {
+        "count": len(ordered),
+        "median": statistics.median(ordered),
+        "p95": percentile(ordered, 95),
+        "mean": round(sum(ordered) / len(ordered), 2),
+        "min": ordered[0],
+        "max": ordered[-1],
+    }
+
+
+def shared_prefix_length(left: str, right: str) -> int:
+    limit = min(len(left), len(right))
+    index = 0
+    while index < limit and left[index] == right[index]:
+        index += 1
+    return index
+
+
+def normalise_for_recurrence(text: str) -> str:
+    """Remove session-scoped identifiers so recurrence is measured by wording."""
+    return HEX_RE.sub("<id>", UUID_RE.sub("<uuid>", text))
+
+
+def find_block(content: str, tag: str) -> str | None:
+    open_tag = f"<{tag}>"
+    close_tag = f"</{tag}>"
+    start = content.find(open_tag)
+    if start < 0:
+        return None
+    end = content.find(close_tag, start)
+    if end < 0:
+        return None
+    return content[start : end + len(close_tag)]
+
+
+def all_blocks(content: str, tag: str) -> list[str]:
+    open_tag = f"<{tag}>"
+    close_tag = f"</{tag}>"
+    blocks: list[str] = []
+    start = 0
+    while True:
+        begin = content.find(open_tag, start)
+        if begin < 0:
+            return blocks
+        end = content.find(close_tag, begin)
+        if end < 0:
+            return blocks
+        end += len(close_tag)
+        blocks.append(content[begin:end])
+        start = end
+
+
+def system_tail(content: str) -> str:
+    """Text after the last known structural block (template variables)."""
+    starts = [content.rfind(tag) + len(tag) for tag in CLOSING_TAGS if content.rfind(tag) >= 0]
+    if not starts:
+        return ""
+    return content[max(starts) :]
+
+
+def split_system_tail(tail: str) -> tuple[str, str]:
+    """Split the untagged tail into (completion instruction, template block).
+
+    The template block is identified by its ``- VSCODE_`` variable lines, not
+    by its wording.  Any text before that block is a separate instruction.
+    """
+    first_variable = tail.find("\n- VSCODE_")
+    if first_variable < 0:
+        return tail, ""
+    line_start = first_variable + 1
+    previous_newline = tail.rfind("\n", 0, line_start - 1)
+    template_start = previous_newline + 1
+    return tail[:template_start], tail[template_start:]
+
+
+def extract_system_blocks(content: str) -> dict[str, str]:
+    blocks: dict[str, str] = {}
+    instructions = all_blocks(content, "instructions")
+    base = next((b for b in instructions if "<agents>" not in b and "<skills>" not in b), None)
+    agents = next((b for b in instructions if "<agents>" in b), None)
+    skills = next((b for b in instructions if "<skills>" in b), None)
+
+    first_instructions = content.find("<instructions>")
+    blocks["system.identity"] = content[:first_instructions] if first_instructions >= 0 else ""
+    if base is not None:
+        blocks["system.instructions"] = base
+    if agents is not None:
+        blocks["system.agents_catalog"] = agents
+    if skills is not None:
+        blocks["system.skills_catalog"] = skills
+
+    for tag, key in (
+        ("toolUseInstructions", "system.tool_use"),
+        ("outputFormatting", "system.output_formatting"),
+        ("modeInstructions", "system.mode_instructions"),
+    ):
+        block = find_block(content, tag)
+        if block is not None:
+            blocks[key] = block
+
+    formatting = blocks.get("system.output_formatting")
+    if formatting is not None:
+        example = find_block(formatting, "example")
+        if example is not None:
+            blocks["system.output_formatting.example"] = example
+
+    tail = system_tail(content)
+    if tail:
+        completion, template = split_system_tail(tail)
+        if completion.strip():
+            blocks["system.completion_instruction"] = completion
+        if template:
+            blocks["system.template_variables"] = template
+    return blocks
+
+
+def extract_user_blocks(messages: list[dict]) -> dict[str, str]:
+    wanted = {
+        "environment_info": "user.environment",
+        "workspace_info": "user.workspace",
+        "context": "user.context",
+        "reminderInstructions": "user.reminder",
+        "userRequest": "user.request",
+        "editorContext": "user.editor_context",
+    }
+    found: dict[str, str] = {}
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        for tag, key in wanted.items():
+            if key in found:
+                continue
+            block = find_block(content, tag)
+            if block is not None:
+                found[key] = block
+    return found
+
+
+def message_content(message: dict) -> str:
+    content = message.get("content")
+    return content if isinstance(content, str) else ""
+
+
+def content_concat(body: dict) -> str:
+    return "\x00".join(message_content(message) for message in body.get("messages", []))
+
+
+def load_corpus(data_dir: Path) -> tuple[list[dict], list[dict]]:
+    files = sorted(data_dir.glob("records-*.jsonl"))
+    files = [path for path in files if path.name != "records.jsonl"]
+    manifest: list[dict[str, Any]] = []
+    records: list[dict] = []
+    for path in files:
+        raw = path.read_bytes()
+        file_records: list[dict] = []
+        corrupt = 0
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                corrupt += 1
+                continue
+            if isinstance(record, dict):
+                file_records.append(record)
+        manifest.append(
+            {
+                "file": path.name,
+                "bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "records": len(file_records),
+                "corrupt_lines": corrupt,
+                "_records": file_records,
+            }
+        )
+        records.extend(file_records)
+    return records, manifest
+
+
+def unique_requests(records: list[dict]) -> dict[str, dict]:
+    unique: dict[str, dict] = {}
+    for record in records:
+        request_id = record.get("request_id")
+        if request_id is not None:
+            unique.setdefault(request_id, record)
+    return unique
+
+
+def request_body(record: dict) -> dict:
+    body = record.get("request_body")
+    if not isinstance(body, str):
+        return {}
+    try:
+        decoded = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def response_message(record: dict) -> dict:
+    body = record.get("response_body")
+    if not isinstance(body, str):
+        return {}
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        payload = None
+    if isinstance(payload, dict):
+        choices = payload.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            message = choices[0].get("message")
+            return message if isinstance(message, dict) else {}
+        return {}
+    for line in body.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:") :].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            event = json.loads(data)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        choices = event.get("choices") if isinstance(event, dict) else None
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            message = choices[0].get("message")
+            if isinstance(message, dict):
+                return message
+    return {}
+
+
+def delivered_record(records: list[dict]) -> dict:
+    for record in reversed(records):
+        if record.get("response_body") is not None:
+            return record
+    return records[-1]
+
+
+def role_matches(role: Any, message: dict) -> bool:
+    if isinstance(role, str):
+        return message.get("role") == role
+    if isinstance(role, list):
+        return message.get("role") in role
+    return False
+
+
+def rule_matches(rule: dict, message: dict) -> bool:
+    when = rule.get("when", {})
+    if not role_matches(when.get("role"), message):
+        return False
+    content = message.get("content")
+    if not isinstance(content, str):
+        return False
+    minimum = when.get("min_chars", 0)
+    if not isinstance(minimum, int) or len(content) < minimum:
+        return False
+    pattern = when.get("content_regex")
+    if not isinstance(pattern, str):
+        return False
+    return re.search(pattern, content) is not None
+
+
+def apply_rule(rule: dict, message: dict) -> tuple[bool, str | None]:
+    """Apply one rule to one message. Returns (matched, new_content_or_None)."""
+    if not rule_matches(rule, message):
+        return False, message.get("content")
+    then = rule.get("then", {})
+    action = then.get("action")
+    content = message["content"]
+    if action == "sub":
+        return True, re.sub(rule["when"]["content_regex"], then.get("replacement", ""), content)
+    if action == "replace":
+        return True, then.get("content", "")
+    if action == "truncate":
+        chars = then.get("chars")
+        if not isinstance(chars, int):
+            return True, content
+        marker = then.get("marker", "")
+        keep = max(0, chars - len(marker))
+        return True, content[:keep] + marker
+    if action == "drop":
+        return True, None
+    return False, content
+
+
+def apply_rules(body: dict, rules: list[dict]) -> tuple[dict, list[dict]]:
+    transformed = copy.deepcopy(body)
+    messages = transformed.get("messages")
+    if not isinstance(messages, list):
+        return transformed, []
+    changes: list[dict] = []
+    for rule in rules:
+        kept: list[dict] = []
+        for index, message in enumerate(messages):
+            if not isinstance(message, dict):
+                kept.append(message)
+                continue
+            before = message.get("content")
+            matched, after = apply_rule(rule, message)
+            if not matched:
+                kept.append(message)
+                continue
+            changes.append(
+                {
+                    "rule": rule.get("id"),
+                    "index": index,
+                    "role": message.get("role"),
+                    "action": rule.get("then", {}).get("action"),
+                    "chars_before": len(before) if isinstance(before, str) else 0,
+                    "chars_after": len(after) if isinstance(after, str) else 0,
+                }
+            )
+            if after is None:
+                continue  # drop: leave the message out of `kept`
+            message["content"] = after
+            kept.append(message)
+        messages[:] = kept
+    return transformed, changes
+
+
+def validate_rules(document: dict) -> tuple[list[dict], list[str]]:
+    errors: list[str] = []
+    if document.get("version") != 1:
+        errors.append("version must be 1")
+    rules = document.get("rules")
+    if not isinstance(rules, list):
+        return [], ["rules must be a list"]
+    seen: set[str] = set()
+    for rule in rules:
+        if not isinstance(rule, dict):
+            errors.append("rule must be an object")
+            continue
+        rule_id = rule.get("id")
+        if not isinstance(rule_id, str) or not rule_id:
+            errors.append("rule id must be a non-empty string")
+        elif rule_id in seen:
+            errors.append(f"duplicate rule id: {rule_id}")
+        else:
+            seen.add(rule_id)
+        then = rule.get("then")
+        if not isinstance(then, dict):
+            errors.append(f"{rule_id}: then must be an object")
+            continue
+        action = then.get("action")
+        if action not in {"drop", "replace", "sub", "truncate"}:
+            errors.append(f"{rule_id}: unknown action {action!r}")
+        if action == "replace" and not isinstance(then.get("content"), str):
+            errors.append(f"{rule_id}: replace needs then.content")
+        if action == "sub" and not isinstance(then.get("replacement"), str):
+            errors.append(f"{rule_id}: sub needs then.replacement")
+        if action == "truncate" and not isinstance(then.get("chars"), int):
+            errors.append(f"{rule_id}: truncate needs then.chars")
+        when = rule.get("when")
+        if not isinstance(when, dict):
+            errors.append(f"{rule_id}: when must be an object")
+            continue
+        role = when.get("role")
+        if not isinstance(role, (str, list)):
+            errors.append(f"{rule_id}: when.role must be a string or list")
+        if "min_chars" in when and not isinstance(when["min_chars"], int):
+            errors.append(f"{rule_id}: when.min_chars must be an integer")
+        pattern = when.get("content_regex")
+        if not isinstance(pattern, str):
+            errors.append(f"{rule_id}: when.content_regex must be a string")
+        else:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                errors.append(f"{rule_id}: invalid regex: {exc}")
+    return [rule for rule in rules if isinstance(rule, dict)], errors
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    parser.add_argument("--rules", type=Path, default=DEFAULT_RULES)
+    args = parser.parse_args(argv)
+
+    records, manifest = load_corpus(args.data_dir)
+    unique = unique_requests(records)
+    by_request: dict[str, list[dict]] = defaultdict(list)
+    for record in records:
+        if record.get("request_id") is not None:
+            by_request[record["request_id"]].append(record)
+
+    # Per-file manifest and turn counts.
+    for entry in manifest:
+        file_records = entry.pop("_records")
+        file_requests = unique_requests(file_records)
+        entry["requests"] = len(file_requests)
+        entry["turns"] = sum(
+            1
+            for record in file_requests.values()
+            if any(
+                message.get("role") == "user"
+                for message in request_body(record).get("messages", [])
+                if isinstance(message, dict)
+            )
+        )
+        entry["conversations"] = len(
+            {
+                record.get("request_headers", {}).get("x-interaction-id")
+                for record in file_records
+                if isinstance(record.get("request_headers"), dict)
+                and record["request_headers"].get("x-interaction-id")
+            }
+        )
+
+    total_turns = sum(
+        1
+        for record in unique.values()
+        if any(
+            message.get("role") == "user"
+            for message in request_body(record).get("messages", [])
+            if isinstance(message, dict)
+        )
+    )
+    total_conversations = len(
+        {
+            record.get("request_headers", {}).get("x-interaction-id")
+            for record in records
+            if isinstance(record.get("request_headers"), dict)
+            and record["request_headers"].get("x-interaction-id")
+        }
+    )
+
+    block_texts: dict[str, list[str]] = defaultdict(list)
+    block_requests: Counter[str] = Counter()
+    history_sizes: list[int] = []
+    request_sizes: dict[str, list[float]] = defaultdict(list)
+    bodies: dict[str, dict] = {}
+    for request_id, record in unique.items():
+        body = request_body(record)
+        bodies[request_id] = body
+        messages = [m for m in body.get("messages", []) if isinstance(m, dict)]
+        system = next((m for m in messages if m.get("role") == "system"), None)
+        system_content = message_content(system) if system else ""
+        blocks = extract_system_blocks(system_content)
+        blocks.update(extract_user_blocks(messages))
+        tools = body.get("tools")
+        tools_chars = (
+            len(json.dumps(tools, ensure_ascii=False, separators=(",", ":")))
+            if isinstance(tools, list)
+            else 0
+        )
+        if isinstance(tools, list):
+            blocks["request.tools"] = json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
+        content_chars = sum(len(message_content(message)) for message in messages)
+        user_request_chars = len(blocks.get("user.request", ""))
+        preamble_chars = (
+            len(system_content)
+            + len(blocks.get("user.environment", ""))
+            + len(blocks.get("user.workspace", ""))
+            + len(blocks.get("user.context", ""))
+            + len(blocks.get("user.reminder", ""))
+        )
+        history_chars = max(0, content_chars - preamble_chars - user_request_chars)
+        request_sizes["request_body_chars"].append(len(record.get("request_body", "")))
+        request_sizes["message_content_chars"].append(content_chars)
+        request_sizes["system_chars"].append(len(system_content))
+        request_sizes["tools_chars"].append(tools_chars)
+        request_sizes["preamble_chars"].append(preamble_chars)
+        request_sizes["user_request_chars"].append(user_request_chars)
+        request_sizes["history_chars"].append(history_chars)
+        body_chars = len(record.get("request_body", ""))
+        if body_chars:
+            request_sizes["preamble_share_of_body"].append(preamble_chars / body_chars)
+            request_sizes["system_share_of_body"].append(len(system_content) / body_chars)
+        if content_chars:
+            request_sizes["system_share_of_content"].append(len(system_content) / content_chars)
+        for key, text in blocks.items():
+            block_texts[key].append(text)
+            block_requests[key] += 1
+        history_sizes.append(history_chars)
+
+    # Stable prefix within a conversation, measured on consecutive turns.
+    sessions: dict[str, list[dict]] = defaultdict(list)
+    for request_id, record in unique.items():
+        headers = record.get("request_headers")
+        session = headers.get("x-interaction-id") if isinstance(headers, dict) else None
+        sessions[str(session)].append(record)
+    for session_records in sessions.values():
+        session_records.sort(key=lambda record: record.get("timestamp", 0))
+
+    def stable_prefixes(transformed: dict[str, dict] | None = None) -> dict[str, Any]:
+        lengths: list[int] = []
+        globals_: list[str] = []
+        for session_records in sessions.values():
+            previous = None
+            for record in session_records:
+                request_id = record["request_id"]
+                body = transformed[request_id] if transformed is not None else bodies[request_id]
+                current = content_concat(body)
+                globals_.append(current)
+                if previous is not None:
+                    lengths.append(shared_prefix_length(previous, current))
+                previous = current
+        common = globals_[0] if globals_ else ""
+        for current in globals_[1:]:
+            common = common[: shared_prefix_length(common, current)]
+        return {
+            "consecutive_pairs": len(lengths),
+            **summary(lengths),
+            "global_common_prefix_chars": len(common),
+            "sessions": len(sessions),
+        }
+
+    before_prefix = stable_prefixes()
+
+    # Rules.
+    try:
+        rule_document = json.loads(args.rules.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(json.dumps({"error": f"cannot read rules: {exc}"}, indent=2))
+        return 2
+    rules, rule_errors = validate_rules(rule_document)
+    if rule_errors:
+        print(json.dumps({"error": "invalid rules", "details": rule_errors}, indent=2))
+        return 2
+
+    rule_matches_count: Counter[str] = Counter()
+    rule_total_matches: Counter[str] = Counter()
+    rule_chars_saved: Counter[str] = Counter()
+    rule_chars_before: Counter[str] = Counter()
+    content_saved: list[int] = []
+    body_saved: list[int] = []
+    request_share: list[float] = []
+    content_share: list[float] = []
+    preamble_before: list[int] = []
+    preamble_after: list[int] = []
+    preamble_share_before: list[float] = []
+    preamble_share_after: list[float] = []
+    transformed_bodies: dict[str, dict] = {}
+    idempotent_failures = 0
+    changed_requests = 0
+    applied_rule_requests: dict[str, set[str]] = defaultdict(set)
+    rule_saved_per_match: dict[str, list[int]] = defaultdict(list)
+
+    for request_id, body in bodies.items():
+        transformed, changes = apply_rules(body, rules)
+        transformed_again, _ = apply_rules(transformed, rules)
+        if json.dumps(transformed, sort_keys=True, ensure_ascii=False) != json.dumps(
+            transformed_again, sort_keys=True, ensure_ascii=False
+        ):
+            idempotent_failures += 1
+
+        transformed_bodies[request_id] = transformed
+        for change in changes:
+            rule_id = str(change["rule"])
+            rule_total_matches[rule_id] += 1
+            applied_rule_requests[rule_id].add(request_id)
+            saved = int(change["chars_before"]) - int(change["chars_after"])
+            rule_chars_saved[rule_id] += saved
+            rule_chars_before[rule_id] += int(change["chars_before"])
+            rule_saved_per_match[rule_id].append(saved)
+
+        before_content = sum(
+            len(message_content(message))
+            for message in body.get("messages", [])
+            if isinstance(message, dict)
+        )
+        after_content = sum(
+            len(message_content(message))
+            for message in transformed.get("messages", [])
+            if isinstance(message, dict)
+        )
+        saved = before_content - after_content
+        if saved:
+            changed_requests += 1
+        content_saved.append(saved)
+        content_share.append(saved / before_content if before_content else 0.0)
+        original_body = unique[request_id].get("request_body", "")
+        serialised = json.dumps(transformed, ensure_ascii=False, separators=(",", ":"))
+        body_saved.append(len(original_body) - len(serialised))
+        if original_body:
+            request_share.append((len(original_body) - len(serialised)) / len(original_body))
+        messages = [m for m in body.get("messages", []) if isinstance(m, dict)]
+        system_content = next(
+            (message_content(m) for m in messages if m.get("role") == "system"), ""
+        )
+        blocks = extract_system_blocks(system_content)
+        blocks.update(extract_user_blocks(messages))
+        request_preamble = (
+            len(system_content)
+            + len(blocks.get("user.environment", ""))
+            + len(blocks.get("user.workspace", ""))
+            + len(blocks.get("user.context", ""))
+            + len(blocks.get("user.reminder", ""))
+        )
+        preamble_before.append(request_preamble)
+        preamble_after.append(request_preamble - saved)
+        if original_body:
+            preamble_share_before.append(request_preamble / len(original_body))
+        # The denominator is the trimmed body: this is the share the client
+        # would still be billed for after the rules have run.
+        if serialised:
+            preamble_share_after.append((request_preamble - saved) / len(serialised))
+
+    for rule in rules:
+        rule_id = str(rule.get("id"))
+        rule_matches_count[rule_id] = len(applied_rule_requests[rule_id])
+    after_prefix = stable_prefixes(transformed_bodies)
+
+    # Tool-calling evidence.
+    delivered = 0
+    tool_call_responses = 0
+    content_responses = 0
+    empty_responses = 0
+    history_tool_calls = 0
+    mode_stats: dict[str, Counter[str]] = defaultdict(Counter)
+    for request_id, record in unique.items():
+        body = bodies[request_id]
+        messages = [m for m in body.get("messages", []) if isinstance(m, dict)]
+        if any(message.get("tool_calls") for message in messages):
+            history_tool_calls += 1
+        response = response_message(delivered_record(by_request[request_id]))
+        if not response:
+            continue
+        delivered += 1
+        calls = response.get("tool_calls") or []
+        if calls:
+            tool_call_responses += 1
+        if response.get("content"):
+            content_responses += 1
+        if not calls and not response.get("content"):
+            empty_responses += 1
+        system_content = next(
+            (message_content(m) for m in messages if m.get("role") == "system"), ""
+        )
+        mode_block = find_block(system_content, "modeInstructions") or ""
+        mode_key = hashlib.sha256(mode_block.encode()).hexdigest()[:8] if mode_block else "none"
+        mode_stats[mode_key]["requests"] += 1
+        if calls:
+            mode_stats[mode_key]["tool_calls"] += 1
+
+    taxonomy: list[dict[str, Any]] = []
+    for key, texts in block_texts.items():
+        lengths = [len(text) for text in texts]
+        variants = Counter(normalise_for_recurrence(text) for text in texts)
+        dominant = max(variants.values()) if variants else 0
+        taxonomy.append(
+            {
+                "id": key,
+                "purpose": PURPOSES.get(key, ""),
+                "requests": block_requests[key],
+                "frequency": round(block_requests[key] / len(unique), 6),
+                "median_chars": statistics.median(lengths) if lengths else 0,
+                "p95_chars": percentile(lengths, 95) if lengths else 0,
+                "variants": len(variants),
+                "dominant_share": round(dominant / len(texts), 6) if texts else 0,
+            }
+        )
+    taxonomy.sort(key=lambda row: row["id"])
+    taxonomy.append(
+        {
+            "id": "conversation.history",
+            "purpose": PURPOSES["conversation.history"],
+            "requests": len(unique),
+            "frequency": 1.0,
+            "median_chars": statistics.median(history_sizes) if history_sizes else 0,
+            "p95_chars": percentile(history_sizes, 95) if history_sizes else 0,
+            # Unlike the tagged blocks, history is defined by its size, so
+            # variants/dominant count distinct character sizes, not texts.
+            "variants": len(set(history_sizes)),
+            "dominant_share": round(
+                Counter(history_sizes).most_common(1)[0][1] / len(history_sizes), 6
+            )
+            if history_sizes
+            else 0,
+        }
+    )
+
+    rules_report = []
+    for rule in rules:
+        rule_id = str(rule.get("id"))
+        rules_report.append(
+            {
+                "id": rule_id,
+                "evidence_class": rule.get("evidence_class"),
+                "decision": rule.get("decision"),
+                "action": rule.get("then", {}).get("action"),
+                "role": rule.get("when", {}).get("role"),
+                "matched_requests": rule_matches_count[rule_id],
+                "match_rate": (
+                    round(rule_matches_count[rule_id] / len(unique), 6) if unique else 0.0
+                ),
+                "total_matches": rule_total_matches[rule_id],
+                "chars_before": rule_chars_before[rule_id],
+                "chars_saved": rule_chars_saved[rule_id],
+                "median_chars_saved_per_matched_request": statistics.median(
+                    rule_saved_per_match[rule_id]
+                )
+                if rule_saved_per_match[rule_id]
+                else 0,
+            }
+        )
+
+    report = {
+        "command": "./scripts/analyse-prompt-preambles --data-dir data",
+        "corpus": {
+            "data_dir": str(args.data_dir),
+            "files": manifest,
+            "totals": {
+                "files": len(manifest),
+                "bytes": sum(entry["bytes"] for entry in manifest),
+                "records": len(records),
+                "requests": len(unique),
+                "turns": total_turns,
+                "conversations": total_conversations,
+            },
+            "sample_floor": {
+                "minimum_requests": 100,
+                "minimum_files": 3,
+                "minimum_turns_per_file": 1,
+                "met": (
+                    len(unique) >= 100
+                    and len(manifest) >= 3
+                    and all(entry.get("turns", 0) >= 1 for entry in manifest)
+                ),
+            },
+            "excluded": ["data/records.jsonl (live, still-growing file)"],
+        },
+        "definitions": {
+            "request": "one unique request_id (retries/passes of the same request counted once)",
+            "turn": "a request whose message list contains at least one user message",
+            "units": "character counts; never bytes or tokens",
+            "preamble": "system content plus environment, workspace, date and reminder blocks; excludes userRequest and history",
+            "preamble_share_of_body_before": "pre-trim preamble divided by the original serialised request body",
+            "preamble_share_of_trimmed_body_after": "post-trim preamble divided by the trimmed serialised request body",
+            "stable_prefix": "longest common prefix of concatenated message contents for consecutive requests in one conversation (x-interaction-id), plus the prefix common to all requests",
+        },
+        "taxonomy": taxonomy,
+        "request_sizes": {key: summary(values) for key, values in request_sizes.items()},
+        "stable_prefix_before": before_prefix,
+        "stable_prefix_after": after_prefix,
+        "rules": rules_report,
+        "saving": {
+            "requests_changed": changed_requests,
+            "content_chars_saved": summary(content_saved),
+            "body_chars_saved": summary(body_saved),
+            "share_of_request_body": summary(request_share),
+            "share_of_message_content": summary(content_share),
+            "preamble_chars_before": summary(preamble_before),
+            "preamble_chars_after": summary(preamble_after),
+            "preamble_share_of_body_before": summary(preamble_share_before),
+            "preamble_share_of_trimmed_body_after": summary(preamble_share_after),
+            "idempotent": idempotent_failures == 0,
+            "non_idempotent_requests": idempotent_failures,
+        },
+        "tool_calling": {
+            "requests": len(unique),
+            "delivered_responses": delivered,
+            "responses_with_tool_calls": tool_call_responses,
+            "response_tool_call_rate": round(tool_call_responses / delivered, 6)
+            if delivered
+            else 0,
+            "responses_with_content": content_responses,
+            "empty_responses": empty_responses,
+            "requests_with_tool_history": history_tool_calls,
+            "history_tool_call_rate": round(history_tool_calls / len(unique), 6) if unique else 0.0,
+            "mode_variants": {
+                key: {
+                    "requests": counts["requests"],
+                    "tool_calls": counts["tool_calls"],
+                    "tool_call_rate": round(counts["tool_calls"] / counts["requests"], 6)
+                    if counts["requests"]
+                    else 0,
+                }
+                for key, counts in sorted(mode_stats.items())
+            },
+        },
+        "rule_validation": {"errors": rule_errors, "rules": len(rules)},
+    }
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

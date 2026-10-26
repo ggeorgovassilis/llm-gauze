@@ -159,7 +159,7 @@ def tool_conversation_request(request_id, timestamp):
         ),
         streamed=False,
         think_cleanup=None,
-        tool_repair=[{"kind": "arguments_repaired", "index": 0}],
+        tool_repair=[{"kind": "repaired_arguments", "index": 0}],
         extract=None,
         coast=None,
         empty_stop=None,

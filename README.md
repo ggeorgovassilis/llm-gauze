@@ -178,6 +178,11 @@ The four digests (`stuck`, `endpoint`, `remediation`, `narrative`) emit compact
 JSON summaries; see [`docs/analysis.md`](docs/analysis.md) for the pipeline
 grammar, filters and output fields.
 
+Prompt-preamble sizes, trimming-rule match rates and the measured saving come
+from a separate read-only command, `scripts/analyse-prompt-preambles`; its
+results and decisions are in
+[`docs/prompt-trimming-analysis.md`](docs/prompt-trimming-analysis.md).
+
 ## Developing
 
 See [`DEVELOPING.md`](DEVELOPING.md) for local development, running the tests,

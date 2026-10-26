@@ -9,6 +9,17 @@ doing, which remediation fired, and what actually happened in the conversation
 The implementation lives in `source/app/analysis/`; the CLI wrapper is
 `scripts/analyse-records`.
 
+## Prompt-preamble analysis
+
+A second, narrowly scoped analysis surface measures client prompt preambles and
+the starter trimming rule set: `scripts/analyse-prompt-preambles`. It prints
+aggregates only (sizes, frequencies, hashes and match rates), reads the dated
+`records-*.jsonl` corpus read-only, and is the reproducibility command for
+[`prompt-trimming-analysis.md`](prompt-trimming-analysis.md). Use
+`scripts/analyse-records` for the record-level digests below; use
+`scripts/analyse-prompt-preambles` when you need per-block sizes, rule match
+rates or the measured saving.
+
 ## Stages
 
 A pipeline is a quoted string of `|`-separated stages:

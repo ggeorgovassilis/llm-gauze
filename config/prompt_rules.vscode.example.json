@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "replace-identity-policy",
+      "evidence_class": "system.identity",
+      "decision": "Replace",
+      "match_rate": 1.0,
+      "when": {
+        "role": "system",
+        "content_regex": "\\A(?:[^\\n]*\\n){7}(?=<instructions>)"
+      },
+      "then": {
+        "action": "sub",
+        "replacement": ""
+      }
+    },
+    {
+      "id": "compact-general-instructions",
+      "evidence_class": "system.instructions",
+      "decision": "Replace",
+      "match_rate": 1.0,
+      "when": {
+        "role": "system",
+        "content_regex": "<instructions>\\nYou are a highly sophisticated[\\s\\S]*?</instructions>"
+      },
+      "then": {
+        "action": "sub",
+        "replacement": "<instructions>\nInfer the project’s languages and frameworks from context. Break the request into smaller concepts before editing.\n</instructions>"
+      }
+    },
+    {
+      "id": "compact-tool-use-instructions",
+      "evidence_class": "system.tool_use",
+      "decision": "Replace",
+      "match_rate": 1.0,
+      "when": {
+        "role": "system",
+        "content_regex": "<toolUseInstructions>\\nIf the user is requesting a code sample[\\s\\S]*?</toolUseInstructions>"
+      },
+      "then": {
+        "action": "sub",
+        "replacement": "<toolUseInstructions>\nFollow each tool’s JSON schema exactly and include all required properties. Prefer calling independent tools in parallel. Use absolute file paths. Prefer reading large sections over many small reads.\n</toolUseInstructions>"
+      }
+    },
+    {
+      "id": "replace-output-formatting",
+      "evidence_class": "system.output_formatting",
+      "decision": "Replace",
+      "match_rate": 1.0,
+      "when": {
+        "role": "system",
+        "content_regex": "<outputFormatting>\\nUse proper Markdown formatting[\\s\\S]*?</outputFormatting>"
+      },
+      "then": {
+        "action": "sub",
+        "replacement": "<outputFormatting>\nUse Markdown formatting. Emit valid JSON where structured output is required.\n</outputFormatting>"
+      }
+    }
+  ]
+}

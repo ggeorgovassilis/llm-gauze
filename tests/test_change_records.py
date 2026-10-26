@@ -21,6 +21,9 @@ from app.remediation.tool_call import ToolCallGuard
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = REPO_ROOT / "docs" / "record-schema.md"
+# Optional on every kind per the schema prose, not repeated per row in the table.
+GENERIC_CHANGE_KEYS = {"index", "role"}
+KIND_LITERAL = re.compile(r"""["']kind["']\s*:\s*["']([A-Za-z0-9_]+)["']""")
 
 
 def _documented_change_keys() -> dict[str, set[str]]:
@@ -35,7 +38,7 @@ def _documented_change_keys() -> dict[str, set[str]]:
         kind = cells[0].strip("`")
         if kind == "kind":
             continue
-        documented[kind] = set(re.findall(r"`([a-z_]+)`", cells[2]))
+        documented[kind] = set(re.findall(r"`([a-z0-9_]+)`", cells[2]))
     return documented
 
 
@@ -45,7 +48,7 @@ def _kinds_emitted_in_source() -> set[str]:
     sources.extend(sorted((REPO_ROOT / "source" / "app" / "remediation").glob("*.py")))
     kinds: set[str] = set()
     for path in sources:
-        kinds.update(re.findall(r'"kind":\s*"([a-z_]+)"', path.read_text(encoding="utf-8")))
+        kinds.update(KIND_LITERAL.findall(path.read_text(encoding="utf-8")))
     return kinds
 
 
@@ -55,15 +58,27 @@ def _assert_documented(changes: list[dict]) -> None:
     assert changes, "emitter produced no change records"
     for change in changes:
         kind = change["kind"]
-        expected = {"kind", *documented.get(kind, set())}
         assert kind in documented, f"undocumented change kind: {kind}"
-        assert set(change) == expected, (
-            f"{kind} emitted {sorted(change)}, documented {sorted(expected)}"
+        required = {"kind", *documented[kind]}
+        allowed = required | GENERIC_CHANGE_KEYS
+        assert required <= set(change) <= allowed, (
+            f"{kind} emitted {sorted(change)}, documented {sorted(allowed)}"
         )
 
 
 def test_documented_kinds_cover_every_emitter():
     assert _kinds_emitted_in_source() == set(_documented_change_keys())
+
+
+def test_kind_source_scan_handles_quote_styles_and_digits():
+    source = """{"kind": "tool_overflow"} {'kind': 'think2'} 'kind': "flagged3" """
+    assert KIND_LITERAL.findall(source) == ["tool_overflow", "think2", "flagged3"]
+
+
+def test_generic_optional_keys_are_allowed_on_every_kind():
+    # `index` and `role` are optional on every record, not just the kinds whose
+    # table row happens to mention them.
+    _assert_documented([{"kind": "empty_content_placeholder", "index": 0, "role": "assistant"}])
 
 
 def test_overflow_emits_documented_keys():
@@ -98,18 +113,9 @@ def test_tool_call_emits_documented_keys():
     _assert_documented(changes)
 
 
-@pytest.mark.parametrize(
-    ("extract_outcome", "empty_stop_outcome"),
-    [("exhausted", None), (None, "exhausted")],
-)
-def test_proxy_empty_placeholder_emits_documented_keys(
-    tmp_path, extract_outcome, empty_stop_outcome
-):
-    """Both proxy-side empty-content places emit the shared documented kind."""
-    record_path = tmp_path / "change_records.jsonl"
-    proxy = SimpleNamespace(recorder=Recorder(record_path))
-    result = _StreamResult(
-        content="",
+def _result(content: str) -> _StreamResult:
+    return _StreamResult(
+        content=content,
         reasoning="",
         tool_calls=None,
         meta={"model": "test"},
@@ -120,11 +126,17 @@ def test_proxy_empty_placeholder_emits_documented_keys(
         duration=0.01,
     )
 
+
+def _finalize(tmp_path, content: str, *, extract_outcome=None, empty_stop_outcome=None):
+    """Drive the proxy finaliser with one exhausted rung and return the response."""
+    record_path = tmp_path / "change_records.jsonl"
+    proxy = SimpleNamespace(recorder=Recorder(record_path))
+
     async def run():
-        await Proxy._finalize_success(
+        return await Proxy._finalize_success(
             proxy,
             {},
-            result,
+            _result(content),
             None,
             False,
             1 if extract_outcome else 0,
@@ -138,12 +150,43 @@ def test_proxy_empty_placeholder_emits_documented_keys(
             None,
         )
 
-    asyncio.run(run())
-    records = [
-        json.loads(line)
-        for line in record_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    changes = records[-1]["think_cleanup"]
+    return asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("extract_outcome", "empty_stop_outcome"),
+    [("exhausted", None), (None, "exhausted")],
+)
+def test_proxy_empty_placeholder_emits_documented_keys(
+    tmp_path, read_records, extract_outcome, empty_stop_outcome
+):
+    """Both proxy-side empty-content places emit the shared documented kind."""
+    _finalize(
+        tmp_path,
+        "",
+        extract_outcome=extract_outcome,
+        empty_stop_outcome=empty_stop_outcome,
+    )
+    changes = read_records(tmp_path / "change_records.jsonl")[-1]["think_cleanup"]
     assert [change["kind"] for change in changes] == ["empty_content_placeholder"]
     _assert_documented(changes)
+
+
+@pytest.mark.parametrize(
+    ("extract_outcome", "empty_stop_outcome"),
+    [("exhausted", None), (None, "exhausted")],
+)
+def test_proxy_records_placeholder_only_when_it_substituted(
+    tmp_path, read_records, extract_outcome, empty_stop_outcome
+):
+    """A non-empty final turn is delivered unchanged and gets no placeholder record."""
+    response = _finalize(
+        tmp_path,
+        "kept",
+        extract_outcome=extract_outcome,
+        empty_stop_outcome=empty_stop_outcome,
+    )
+    assert response.status_code == 200
+    message = json.loads(response.body)["choices"][0]["message"]
+    assert message["content"] == "kept"
+    assert read_records(tmp_path / "change_records.jsonl")[-1]["think_cleanup"] is None

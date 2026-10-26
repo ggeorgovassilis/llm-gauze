@@ -68,7 +68,9 @@ bodies stay distinguishable.
 A *change record* is a small dict that a guard or the proxy attaches to a
 record to report a mutation it made to the exchange. Change records are carried
 in three lists — `message_overflow`, `think_cleanup` and `tool_repair` — and each
-is `null` when nothing changed. Every change record has the same shape:
+is `null` when that stage ran but nothing changed. Some success records omit a
+list key entirely when the stage never ran (for example a remediation-pass
+record that never reaches tool repair). Every change record has the same shape:
 
 * `kind` — **mandatory** on every change record; the discriminator listed in
   the table below.
@@ -78,7 +80,9 @@ is `null` when nothing changed. Every change record has the same shape:
 * `role` — optional; the role of the affected message, for emitters that
   record one.
 * Every other field is kind-specific and must be listed for that kind in the
-  table below. Consumers may rely on a kind carrying no undocumented fields.
+  table below. `index` and `role` are permitted on any kind and are therefore
+  not repeated in the table. Consumers may rely on a kind carrying no
+  undocumented fields.
 
 All size fields are **character** counts — never bytes or tokens. `size` is a
 measurement compared against a threshold; a record that rewrites content
@@ -88,11 +92,11 @@ same pair.)
 
 | `kind` | Emitted by | Fields besides `kind` | Meaning |
 | --- | --- | --- | --- |
-| `tool_overflow` | `MessageOverflowGuard` (`remediation/overflow.py`) | `index`, `size`, `truncated` | A `role: "tool"` message exceeded `MESSAGE_OVERFLOW_THRESHOLD`. `size` is its original character count; `truncated` says whether it was cut to a bounded prefix. |
+| `tool_overflow` | `MessageOverflowGuard` (`remediation/overflow.py`) | `size`, `truncated` | A `role: "tool"` message exceeded `MESSAGE_OVERFLOW_THRESHOLD`. `size` is its original character count; `truncated` says whether it was cut to a bounded prefix. |
 | `relocated_think` | `ThinkContentGuard.relocate` (`remediation/think.py`) | `chars_before`, `chars_after`, `blocks` | Leaked thinking text was moved out of visible `content` into `reasoning`. The character counts describe `content`; `blocks` is the number of relocated blocks. |
 | `empty_content_placeholder` | `ThinkContentGuard.guard_empty` (`remediation/think.py`) and the finalising proxy (`proxy.py`) | — | Visible content was empty, so the configured placeholder was substituted. |
-| `repaired_arguments` | `ToolCallGuard.validate` (`remediation/tool_call.py`) | `index` | A tool call's `function.arguments` was repaired into well-formed JSON. |
-| `flagged_malformed` | `ToolCallGuard.validate` (`remediation/tool_call.py`) | `index`, `reason` | A tool call was left unchanged because its arguments could not be repaired. `reason` is one of `not_an_object`, `missing_function`, `missing_name`, `arguments_not_string`, `unfixable_arguments`. |
+| `repaired_arguments` | `ToolCallGuard.validate` (`remediation/tool_call.py`) | — | A tool call's `function.arguments` was repaired into well-formed JSON. |
+| `flagged_malformed` | `ToolCallGuard.validate` (`remediation/tool_call.py`) | `reason` | A tool call was left unchanged because its arguments could not be repaired. `reason` is one of `not_an_object`, `missing_function`, `missing_name`, `arguments_not_string`, `unfixable_arguments`. |
 
 ## Attempt-failure fields
 

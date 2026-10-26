@@ -1400,16 +1400,18 @@ class Proxy:
             # rung's captured resource, not this turn, so the guard's
             # empty-reasoning branch would otherwise leave the turn empty.
             tool_calls = None
-            content = content or settings.think_empty_response_placeholder
-            cleanup_changes.append({"kind": "empty_content_placeholder"})
+            if not content:
+                content = settings.think_empty_response_placeholder
+                cleanup_changes.append({"kind": "empty_content_placeholder"})
         elif empty_stop_outcome == "exhausted":
             # The final turn is still a silent empty stop. It has no tool calls
             # by definition, but apply the placeholder floor directly so the
             # client never receives a message-less turn — the guard only floors
             # empty turns that still carry reasoning, and here there is none.
             tool_calls = None
-            content = content or settings.think_empty_response_placeholder
-            cleanup_changes.append({"kind": "empty_content_placeholder"})
+            if not content:
+                content = settings.think_empty_response_placeholder
+                cleanup_changes.append({"kind": "empty_content_placeholder"})
 
         if guard is not None:
             content, guard_changes = guard.guard_empty(content, reasoning, tool_calls)

@@ -5,7 +5,11 @@
   cannot leak into the next one.
 * ``mock_upstream`` is a factory returning a :class:`mock_upstream.MockUpstream`
   (see that module); each server it creates is stopped after the test.
+* ``read_records`` decodes a JSONL recorder file into a list of records, shared
+  by the record-schema tests.
 """
+
+import json
 
 import pytest
 from app.config import settings
@@ -34,3 +38,14 @@ def mock_upstream():
     yield _make
     for server in servers:
         server.stop()
+
+
+@pytest.fixture
+def read_records():
+    """Return a helper that decodes a JSONL recorder file into records."""
+
+    def _read(path):
+        with open(path, encoding="utf-8") as fh:
+            return [json.loads(line) for line in fh if line.strip()]
+
+    return _read

@@ -120,6 +120,7 @@ class ThinkContentGuard(Transform):
         self, content: str, reasoning: str, changes: list[dict]
     ) -> tuple[str, str, list[dict]]:
         """Move the inner text of leaked thinking tags into ``reasoning``."""
+        chars_before = len(content)
         inner_parts: list[str] = []
 
         def _replace(match: re.Match) -> str:
@@ -141,7 +142,8 @@ class ThinkContentGuard(Transform):
             changes.append(
                 {
                     "kind": "relocated_think",
-                    "chars": sum(len(p) for p in inner_parts),
+                    "chars_before": chars_before,
+                    "chars_after": len(content),
                     "blocks": len(inner_parts),
                 }
             )

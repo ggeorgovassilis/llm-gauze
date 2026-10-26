@@ -46,11 +46,6 @@ _OUTCOME_VOCABULARY = {
 }
 
 
-def _read_records(path):
-    with open(path, encoding="utf-8") as fh:
-        return [json.loads(line) for line in fh if line.strip()]
-
-
 def _http(status, body=b'{"ok": true}', content_type="application/json"):
     return httpx.Response(status, content=body, headers={"content-type": content_type})
 
@@ -90,7 +85,7 @@ def test_attempt_outcome_context_window_beats_status():
 # --- buffered forward path --------------------------------------------
 
 
-def _run_buffered(handler, *, record_path, body=None, **overrides):
+def _run_buffered(handler, *, record_path, read_records, body=None, **overrides):
     transport = httpx.MockTransport(handler)
     with settings_override(
         loop_detection_enabled=False,
@@ -108,14 +103,18 @@ def _run_buffered(handler, *, record_path, body=None, **overrides):
             request = await make_request(request_body, path="/v1/completions")
             return await proxy.forward(request, "v1/completions")
 
-        return asyncio.run(run()), _read_records(record_path)
+        return asyncio.run(run()), read_records(record_path)
 
 
-def test_buffered_success_record(tmp_path):
+def test_buffered_success_record(tmp_path, read_records):
     async def handler(request):
         return _http(200)
 
-    resp, records = _run_buffered(handler, record_path=tmp_path / "record_schema_success.jsonl")
+    resp, records = _run_buffered(
+        handler,
+        record_path=tmp_path / "record_schema_success.jsonl",
+        read_records=read_records,
+    )
     assert resp.status_code == 200
     assert len(records) == 1, records
     assert records[0]["outcome"] == "success"
@@ -123,23 +122,29 @@ def test_buffered_success_record(tmp_path):
     assert records[0]["response_body"] == '{"ok": true}'
 
 
-def test_buffered_http_error_record(tmp_path):
+def test_buffered_http_error_record(tmp_path, read_records):
     async def handler(request):
         return _http(404, body=b'{"error": "not found"}')
 
-    resp, records = _run_buffered(handler, record_path=tmp_path / "record_schema_http_error.jsonl")
+    resp, records = _run_buffered(
+        handler,
+        record_path=tmp_path / "record_schema_http_error.jsonl",
+        read_records=read_records,
+    )
     assert resp.status_code == 404
     assert len(records) == 1, records
     assert records[0]["outcome"] == "http_error"
     assert records[0]["response_body"] == '{"error": "not found"}'
 
 
-def test_buffered_upstream_failure_record(tmp_path):
+def test_buffered_upstream_failure_record(tmp_path, read_records):
     async def handler(request):
         raise httpx.ConnectError("connection refused")
 
     resp, records = _run_buffered(
-        handler, record_path=tmp_path / "record_schema_upstream_failure.jsonl"
+        handler,
+        record_path=tmp_path / "record_schema_upstream_failure.jsonl",
+        read_records=read_records,
     )
     assert resp.status_code == 502
     assert len(records) == 3, records
@@ -148,7 +153,7 @@ def test_buffered_upstream_failure_record(tmp_path):
     assert all(r["response_body"] is None for r in records), records
 
 
-def test_buffered_retry_discards_intermediate_body(tmp_path):
+def test_buffered_retry_discards_intermediate_body(tmp_path, read_records):
     calls = {"n": 0}
 
     async def handler(request):
@@ -157,7 +162,11 @@ def test_buffered_retry_discards_intermediate_body(tmp_path):
             return _http(500, body=b'{"error": "boom"}')
         return _http(200)
 
-    resp, records = _run_buffered(handler, record_path=tmp_path / "record_schema_retry.jsonl")
+    resp, records = _run_buffered(
+        handler,
+        record_path=tmp_path / "record_schema_retry.jsonl",
+        read_records=read_records,
+    )
     assert resp.status_code == 200
     assert [r["outcome"] for r in records] == ["http_error", "success"], records
     # The retried attempt's body was discarded, not delivered.
@@ -168,7 +177,7 @@ def test_buffered_retry_discards_intermediate_body(tmp_path):
 # --- streaming verdict-abort record -----------------------------------
 
 
-def test_streaming_abort_record_has_verdict_outcome(tmp_path):
+def test_streaming_abort_record_has_verdict_outcome(tmp_path, read_records):
     """A stall abort records the verdict outcome and a null response_body."""
     steps = [(0.03, b": ping\n\n") for _ in range(30)]
     record_path = tmp_path / "record_schema_stall.jsonl"
@@ -202,7 +211,7 @@ def test_streaming_abort_record_has_verdict_outcome(tmp_path):
 
             asyncio.run(run())
 
-    records = _read_records(record_path)
+    records = read_records(record_path)
     aborts = [r for r in records if r.get("abort_kind")]
     assert len(aborts) == 1, records
     assert aborts[0]["abort_kind"] == "stalled", aborts[0]
@@ -214,7 +223,7 @@ def test_streaming_abort_record_has_verdict_outcome(tmp_path):
 # --- extract / coast remediation-pass records ---------------------------
 
 
-def test_extract_pass_moves_turn_to_pre_remediation_body(tmp_path):
+def test_extract_pass_moves_turn_to_pre_remediation_body(tmp_path, read_records):
     empty = [
         _chunk({"role": "assistant", "reasoning_content": "thinking hard"}),
         _chunk({}, finish_reason="stop"),
@@ -257,7 +266,7 @@ def test_extract_pass_moves_turn_to_pre_remediation_body(tmp_path):
 
             asyncio.run(run())
 
-    records = _read_records(record_path)
+    records = read_records(record_path)
     triggered = [r for r in records if r.get("extract", {}).get("outcome") == "triggered"]
     assert len(triggered) == 1, records
     # The re-submitted (discarded) turn moved to `pre_remediation_body`;
@@ -273,7 +282,7 @@ def test_extract_pass_moves_turn_to_pre_remediation_body(tmp_path):
     assert "the real answer" in final["response_body"], final
 
 
-def test_coast_pass_moves_turn_to_pre_remediation_body(tmp_path):
+def test_coast_pass_moves_turn_to_pre_remediation_body(tmp_path, read_records):
     record_path = tmp_path / "record_schema_coast.jsonl"
     coasted = [
         _chunk(
@@ -356,7 +365,7 @@ def test_coast_pass_moves_turn_to_pre_remediation_body(tmp_path):
 
             asyncio.run(run())
 
-    records = _read_records(record_path)
+    records = read_records(record_path)
     triggered = [r for r in records if r.get("coast", {}).get("outcome") == "triggered"]
     assert len(triggered) == 1, records
     assert triggered[0]["outcome"] == "success", triggered[0]
@@ -371,7 +380,7 @@ def test_coast_pass_moves_turn_to_pre_remediation_body(tmp_path):
 # --- runaway / loop-retry remediation-pass records --------------------
 
 
-def test_runaway_pass_records_runaway_outcome(tmp_path):
+def test_runaway_pass_records_runaway_outcome(tmp_path, read_records):
     """A runaway-reasoning nudge records ``outcome: runaway_reasoning_aborted``."""
     rng = random.Random(1234)
     flood = " ".join("".join(rng.choices("abcdefghijklmnopqrstuvwxyz", k=6)) for _ in range(2500))
@@ -420,7 +429,7 @@ def test_runaway_pass_records_runaway_outcome(tmp_path):
 
             asyncio.run(run())
 
-    records = _read_records(record_path)
+    records = read_records(record_path)
     triggered = [r for r in records if r.get("runaway", {}).get("outcome") == "triggered"]
     assert len(triggered) == 1, records
     assert triggered[0]["outcome"] == "runaway_reasoning_aborted", triggered[0]
@@ -428,7 +437,7 @@ def test_runaway_pass_records_runaway_outcome(tmp_path):
     assert triggered[0]["response_body"] is None, triggered[0]
 
 
-def test_loop_retry_pass_records_loop_aborted_outcome(tmp_path):
+def test_loop_retry_pass_records_loop_aborted_outcome(tmp_path, read_records):
     """A varied-sampling re-submission records ``outcome: loop_aborted``."""
     sentence = "Let me carefully reconsider the whole approach before continuing."
     loop_turn = [
@@ -474,7 +483,7 @@ def test_loop_retry_pass_records_loop_aborted_outcome(tmp_path):
 
             asyncio.run(run())
 
-    records = _read_records(record_path)
+    records = read_records(record_path)
     triggered = [r for r in records if r.get("loop_retry", {}).get("outcome") == "triggered"]
     assert len(triggered) == 1, records
     assert triggered[0]["outcome"] == "loop_aborted", triggered[0]

@@ -129,7 +129,7 @@ def test_narrative_reconstructs_turn_tool_calls_and_conversation():
     assert request["tool_calls"][0]["result"] is None
     assert 'User asked "buy the first one"' in request["summary"]
     assert "buy" in request["summary"]
-    assert request["tool_repairs"] == [{"kind": "arguments_repaired", "index": 0}]
+    assert request["tool_repairs"] == [{"kind": "repaired_arguments", "index": 0}]
 
     roles = [event["kind"] for event in request["conversation"]]
     assert roles == ["user", "assistant"]

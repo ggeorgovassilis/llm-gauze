@@ -86,6 +86,13 @@ def test_prompt_rules_example_passes_the_analysis_validator(
     assert [rule["id"] for rule in validated] == [rule["id"] for rule in rules]
 
 
+def test_prompt_rules_example_keeps_its_analysis_metadata(rules: list[dict[str, Any]]) -> None:
+    for rule in rules:
+        assert rule["evidence_class"], rule["id"]
+        assert rule["decision"] in {"Replace", "Discard"}, rule["id"]
+        assert 0.0 <= float(rule["match_rate"]) <= 1.0, rule["id"]
+
+
 def test_prompt_rules_example_targets_system_messages_only(
     rules: list[dict[str, Any]],
 ) -> None:

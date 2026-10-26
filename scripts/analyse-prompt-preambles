@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Measure Copilot client prompt preambles and the starter trimming rules.
 
-Read-only analysis over the dated ``data/records-*.jsonl`` corpus.  It prints
-aggregates only: sizes, frequencies, hashes and match rates.  Prompt text is
-never written to stdout.
+Read-only analysis over the dated ``records-*.jsonl`` files in the chosen
+``--data-dir``.  It prints aggregates only: sizes, frequencies, hashes and match
+rates.  Prompt text is never written to stdout.
 
 The command is the reproducibility contract for
 ``docs/prompt-trimming-analysis.md``::
 
     ./scripts/analyse-prompt-preambles --data-dir data
 
-The live ``data/records.jsonl`` file is deliberately excluded.
+The live ``records.jsonl`` file in that directory is deliberately excluded.
 """
 
 from __future__ import annotations
@@ -807,7 +807,7 @@ def main(argv: list[str] | None = None) -> int:
                     and all(entry.get("turns", 0) >= 1 for entry in manifest)
                 ),
             },
-            "excluded": ["data/records.jsonl (live, still-growing file)"],
+            "excluded": [f"{args.data_dir / 'records.jsonl'} (live, still-growing file)"],
         },
         "definitions": {
             "request": "one unique request_id (retries/passes of the same request counted once)",

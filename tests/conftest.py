@@ -10,6 +10,10 @@
 * ``analysis`` imports ``scripts/analyse-prompt-preambles`` once per session;
   ``copilot_body`` and ``make_record`` build the synthetic request bodies and
   recorded exchanges used by the prompt-trimming tests.
+
+Rule-file helpers shared by the prompt-trim test modules live in
+:mod:`prompt_trim_support`, not here, so those modules need not import
+``conftest`` directly.
 """
 
 import importlib.util

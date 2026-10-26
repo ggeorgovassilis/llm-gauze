@@ -16,6 +16,7 @@ from app.proxy import Proxy
 from app.recorder import Recorder
 from app.telemetry import telemetry
 from mock_upstream import MockUpstream, chunk, make_request, settings_override
+from prompt_trim_support import write_rules
 
 _OK_BODY = json.dumps(
     {
@@ -44,10 +45,6 @@ _QUIET = {
 }
 
 
-def _document(rules):
-    return {"version": 1, "rules": rules}
-
-
 def _raw_body(payload):
     """Serialise with non-default pretty whitespace.
 
@@ -55,12 +52,6 @@ def _raw_body(payload):
     different bytes, so byte-identity assertions built on this are meaningful.
     """
     return (json.dumps(payload, indent=2) + "\n").encode("utf-8")
-
-
-def _write_rules(tmp_path, rules):
-    path = tmp_path / "prompt_rules.json"
-    path.write_text(json.dumps(_document(rules)), encoding="utf-8")
-    return path
 
 
 def _run_forward(tmp_path, body, *, read_records, rules_path=None, extra_settings=None):
@@ -100,7 +91,7 @@ def _counter_delta(before, after, name):
 
 
 def test_integration_forwards_trimmed_body_records_it_and_counts_it(tmp_path, read_records):
-    rules_path = _write_rules(
+    rules_path = write_rules(
         tmp_path,
         [
             {
@@ -147,7 +138,7 @@ def test_integration_forwards_trimmed_body_records_it_and_counts_it(tmp_path, re
 
 
 def test_integration_dry_run_forwards_original_bytes_and_records_changes(tmp_path, read_records):
-    rules_path = _write_rules(
+    rules_path = write_rules(
         tmp_path,
         [
             {
@@ -203,7 +194,7 @@ def test_integration_disabled_and_no_match_forward_identical_bytes(tmp_path, rea
     assert records[-1]["prompt_trim"] is None
     assert _counter_delta(before, after, "prompt_trim_skipped_total")['reason="disabled"'] == 1
 
-    rules_path = _write_rules(
+    rules_path = write_rules(
         tmp_path,
         [
             {
@@ -221,7 +212,7 @@ def test_integration_disabled_and_no_match_forward_identical_bytes(tmp_path, rea
 
 
 def test_integration_records_both_prompt_trim_and_overflow(tmp_path, read_records):
-    rules_path = _write_rules(
+    rules_path = write_rules(
         tmp_path,
         [
             {
@@ -265,7 +256,7 @@ def test_integration_records_both_prompt_trim_and_overflow(tmp_path, read_record
 def test_prompt_trimming_runs_before_the_overflow_guard(tmp_path, read_records):
     # The rule shortens the tool result below the overflow threshold. If the
     # overflow guard ran first, it would warn/truncate it and record a change.
-    rules_path = _write_rules(
+    rules_path = write_rules(
         tmp_path,
         [
             {
@@ -304,7 +295,7 @@ def test_prompt_trimming_runs_before_the_overflow_guard(tmp_path, read_records):
 
 
 def test_integration_streaming_path_forwards_trimmed_body(tmp_path, read_records):
-    rules_path = _write_rules(
+    rules_path = write_rules(
         tmp_path,
         [
             {
@@ -363,7 +354,7 @@ def test_integration_streaming_path_forwards_trimmed_body(tmp_path, read_records
 
 
 def test_invalid_file_logs_once_disables_trimming_and_still_serves(tmp_path, caplog, read_records):
-    path = _write_rules(
+    path = write_rules(
         tmp_path,
         [
             {
@@ -403,7 +394,7 @@ def test_invalid_file_logs_once_disables_trimming_and_still_serves(tmp_path, cap
 
 
 def test_integration_scan_bound_counts_a_skip(tmp_path, read_records):
-    rules_path = _write_rules(
+    rules_path = write_rules(
         tmp_path,
         [
             {

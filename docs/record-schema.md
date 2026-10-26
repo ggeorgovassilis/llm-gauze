@@ -85,6 +85,16 @@ change record has the same shape:
   not repeated in the table. Consumers may rely on a kind carrying no
   undocumented fields.
 
+Emit a change record as a dict literal (`{"kind": "..."}`) or a
+`dict(kind="...")` call with a literal `kind` value. The schema guard
+(`tests/test_change_records.py`) discovers emitters by scanning the guards and
+the proxy source for those two forms, so a record assembled through a helper, a
+`TypedDict` constructor, or any other call form is invisible to that scan and
+must be added to the guard's emitter allowlist explicitly. The allowlist
+(`CHANGE_EMITTER_CONSTRUCTORS`) matches bare-name calls such as `dict(...)`
+only; an attribute call such as `mod.ChangeRecord(kind=...)` would first need
+scanner support to be recognised at all.
+
 All size fields are **character** counts — never bytes or tokens. `size` is a
 measurement compared against a threshold; a record that rewrites content
 instead reports `chars_before` / `chars_after`, the length of the affected

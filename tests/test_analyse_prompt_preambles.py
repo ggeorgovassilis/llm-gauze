@@ -3,7 +3,8 @@
 The published figures in ``docs/prompt-trimming-analysis.md`` come from
 ``scripts/analyse-prompt-preambles``.  The corpus is local and gitignored, so
 these tests drive the same implementation with synthetic records and pin the
-percentile, shared-prefix, taxonomy, sample-floor and saving calculations.
+percentile, shared-prefix, taxonomy, sample-floor, turn-semantics, request-id
+dedup and saving calculations.
 """
 
 from __future__ import annotations
@@ -367,8 +368,10 @@ def test_report_command_uses_the_invoked_program_name(
         tmp_path,
         {"records-20260101-000000.jsonl": [make_record("r1", copilot_body)]},
     )
+    # Deliberately different from the script's repository path: the report must
+    # echo the invoked program name rather than a hardcoded fallback.
     argv = [
-        "./scripts/analyse-prompt-preambles",
+        "/opt/llm-gauze/bin/analyse-prompt-preambles",
         "--data-dir",
         str(tmp_path),
         "--rules",
@@ -380,3 +383,23 @@ def test_report_command_uses_the_invoked_program_name(
     report = json.loads(capsys.readouterr().out)
 
     assert report["command"] == shlex.join(argv)
+
+
+def test_corpus_excluded_path_follows_the_data_dir(
+    analysis: Any,
+    copilot_body: dict[str, Any],
+    make_record: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_corpus(
+        tmp_path,
+        {"records-20260101-000000.jsonl": [make_record("r1", copilot_body)]},
+    )
+
+    assert analysis.main(["--data-dir", str(tmp_path), "--rules", str(RULES_PATH)]) == 0
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["corpus"]["excluded"] == [
+        f"{tmp_path / 'records.jsonl'} (live, still-growing file)"
+    ]

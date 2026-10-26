@@ -404,13 +404,14 @@ instead of treating the result as drift.
    happens only when the recorder starts, so restart the gateway exactly once
    after the last capture to rotate the final live `records.jsonl` into a dated
    `records-<stamp>.jsonl`; the live file itself is excluded and only the dated
-   files are read. Do not restart again: the new live file is empty, and a
-   second restart rotates it into a zero-turn dated file that fails the
-   `sample_floor` check, because every dated file must contain a user turn. If a
-   zero-turn dated file was produced, remove it from the re-validation directory
-   before step 2. Keep them local; `data/` is gitignored. The sample floor is
-   at least 100 forwarded requests over at least three dated files, each
-   containing a user turn.
+   files are read. Do not restart again: the live `records.jsonl` is created on
+   the first write (`source/app/recorder.py`), not at startup, so a second
+   restart rotates a zero-turn dated file only if a non-empty live file exists.
+   A rotated file without a user turn fails the `sample_floor` check, because
+   every dated file must contain a user turn. If a zero-turn dated file was
+   produced, remove it from the re-validation directory before step 2. Keep
+   them local; `data/` is gitignored. The sample floor is at least 100 forwarded
+   requests over at least three dated files, each containing a user turn.
 2. **Confirm the sample before comparing.** Run the command with `--data-dir
    <isolated dir>` and check that `corpus.sample_floor.met` is `true`. Confirm
    `corpus.files` lists only this run's dated snapshots (no baseline file
@@ -423,8 +424,10 @@ instead of treating the result as drift.
 3. **Confirm the capture was untrimmed.** Before trusting any match rate, check
    a chat-completion record and verify that its system `request_body` still
    carries the `<example>` block that `discard-output-formatting-example`
-   targets. The committed set applies all three rules, so its presence also
-   shows that the identity and formatting-tail rules had not run. Counting
+   targets. The committed set applies all three rules, so the block's presence
+   shows only that `discard-output-formatting-example` did not remove it; it
+   does not show that the identity and formatting-tail rules had not run,
+   because those rules can apply while leaving the block in place. Counting
    marker occurrences keeps prompt text off the terminal and out of the
    report:
 

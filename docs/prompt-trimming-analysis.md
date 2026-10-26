@@ -274,9 +274,12 @@ the #153 dry-run and an A/B run before shipping.
 2. **Validate the rule set.** Run the full `./scripts/test.sh`. To run only the
    new file without the coverage floor, add `--no-cov`:
    `./scripts/test.sh tests/test_prompt_rules_example.py --no-cov`. The tests
-   check the schema, unique ids, compilable regexes, system-only roles, a match
-   for every rule on the synthetic fixture, idempotence, non-message
-   preservation and a positive saving on the fixture.
+   load the analysis script, so they exercise its rule engine, validator and
+   corpus reader: schema, unique ids, system-only roles (including text that
+   would match in a user message), a match for every rule on the synthetic
+   fixture, per-rule and full-set idempotence, preservation of the tool-linked
+   blocks, a bounded saving, live-file exclusion, a clean empty-corpus report
+   and that no prompt text reaches stdout.
 3. **Load it through #153.** `PROMPT_TRIM_ENABLED=true` with the example file;
    confirm validation succeeds. An invalid or unreadable file must log `ERROR`
    once and disable trimming while requests are still served.

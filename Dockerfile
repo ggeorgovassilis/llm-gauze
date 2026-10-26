@@ -24,7 +24,11 @@ COPY tests/ tests/
 # against their source of truth in source/app/config.py.
 COPY .env.example .
 COPY docs/ docs/
+# The starter rules and the analysis script are exercised by
+# tests/test_prompt_rules_example.py; the script also produces the
+# reproducibility figures quoted in docs/prompt-trimming-analysis.md.
 COPY config/prompt_rules.example.json config/
+COPY scripts/analyse-prompt-preambles scripts/
 
 # Runtime image: the gateway as a user runs it.
 FROM base AS runtime

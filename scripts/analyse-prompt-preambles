@@ -762,7 +762,9 @@ def main(argv: list[str] | None = None) -> int:
                 "action": rule.get("then", {}).get("action"),
                 "role": rule.get("when", {}).get("role"),
                 "matched_requests": rule_matches_count[rule_id],
-                "match_rate": round(rule_matches_count[rule_id] / len(unique), 6),
+                "match_rate": (
+                    round(rule_matches_count[rule_id] / len(unique), 6) if unique else 0.0
+                ),
                 "total_matches": rule_total_matches[rule_id],
                 "chars_before": rule_chars_before[rule_id],
                 "chars_saved": rule_chars_saved[rule_id],
@@ -829,7 +831,7 @@ def main(argv: list[str] | None = None) -> int:
             "responses_with_content": content_responses,
             "empty_responses": empty_responses,
             "requests_with_tool_history": history_tool_calls,
-            "history_tool_call_rate": round(history_tool_calls / len(unique), 6),
+            "history_tool_call_rate": round(history_tool_calls / len(unique), 6) if unique else 0.0,
             "mode_variants": {
                 key: {
                     "requests": counts["requests"],

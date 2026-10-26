@@ -51,7 +51,7 @@ Definitions used by the script and below:
 | Term | Definition |
 | --- | --- |
 | request | One unique `request_id`. Retry/pass records of the same request count once. |
-| turn | A request whose message list contains at least one `user` message. |
+| turn | A request whose message list contains at least one `user` message. A request-level unit, not a count of individual `user` messages. |
 | verbatim recurrence | Share of occurrences whose text is identical after normalising session-scoped ids. |
 | preamble | System content plus the environment, workspace, date and reminder blocks. It excludes the user's `userRequest` and conversation history. |
 | preamble share before | Pre-trim preamble characters divided by the original serialised request body. |
@@ -67,7 +67,7 @@ five files, each with at least one turn. The script reports this as
 `corpus.sample_floor` with `minimum_requests`, `minimum_files` and
 `minimum_turns_per_file`; `met` is true only when all three hold.
 
-| File | Bytes | SHA-256 | Records | Requests | Turns | Conversations |
+| File | Bytes | SHA-256 | Records | Requests | Requests with a user message | Conversations |
 | --- | ---: | --- | ---: | ---: | ---: | ---: |
 | `records-20261021-175741.jsonl` | 27,120,149 | `c74639e82990481d4792b8cbf10f71022cf1d99d20bf01f74d91c2c7e3997cd4` | 1,292 | 1,198 | 1,198 | 5 |
 | `records-20261022-040049.jsonl` | 3,377,922 | `dbe5be0675e388328934bbd6302a9387f68ccf59ff134eea8c303ccec6812cd7` | 175 | 165 | 165 | 4 |
@@ -76,8 +76,12 @@ five files, each with at least one turn. The script reports this as
 | `records-20261026-051313.jsonl` | 1,067,201 | `18fa07ad247da0e1d4711e9a06f82989fb3bd8a0ade0ee3a8effabd2c70c866d` | 11 | 11 | 11 | 1 |
 | **Total** | **45,271,376** | | **2,198** | **2,084** | **2,084** | **13** |
 
-Requests and turns coincide in this corpus: every unique request contains at
-least one `user` message, so `requests` and `turns` are equal per file.
+`Requests with a user message` is the script's `turns`: the number of unique
+requests whose message list contains at least one `user` message. It equals
+`Requests` here because every request carries one, and it is the per-file
+evidence for the sample floor. It is not a count of individual `user` messages:
+each body carries its environment/workspace and context/reminder wrappers as
+`user` messages, and history repeats earlier `user` messages across requests.
 `data/records.jsonl` was excluded as the live file specified in the ticket.
 `corrupt_lines` is zero for every file.
 
@@ -290,8 +294,8 @@ the #153 dry-run and an A/B run before shipping.
    synthetic fixture, per-rule and full-set idempotence, preservation of the
    tool-linked blocks, a bounded saving, live-file exclusion, a clean
    empty-corpus report and that no prompt text reaches stdout. The aggregate
-   tests pin the percentile, shared-prefix, taxonomy, sample-floor and saving
-   calculations behind the published figures.
+   tests pin the percentile, shared-prefix, taxonomy, sample-floor, turn-semantics
+   and saving calculations behind the published figures.
 3. **Load it through #153.** `PROMPT_TRIM_ENABLED=true` with the example file;
    confirm validation succeeds. An invalid or unreadable file must log `ERROR`
    once and disable trimming while requests are still served.

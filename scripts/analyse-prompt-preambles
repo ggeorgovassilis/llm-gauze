@@ -811,7 +811,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "definitions": {
             "request": "one unique request_id (retries/passes of the same request counted once)",
-            "turn": "a request whose message list contains at least one user message",
+            "turn": "a request whose message list contains at least one user message (a request-level unit, not a user-message count)",
             "units": "character counts; never bytes or tokens",
             "preamble": "system content plus environment, workspace, date and reminder blocks; excludes userRequest and history",
             "preamble_share_of_body_before": "pre-trim preamble divided by the original serialised request body",

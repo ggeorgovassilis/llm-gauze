@@ -222,6 +222,68 @@ def test_sample_floor_is_met_when_every_file_has_a_user_turn(
     assert report["corpus"]["sample_floor"]["met"] is True
 
 
+def test_turns_count_requests_not_user_messages(
+    analysis: Any,
+    copilot_body: dict[str, Any],
+    make_record: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The synthetic body carries at least two user-role messages
+    # (environment/workspace and context/reminder wrappers) in one request.
+    # ``turns`` is a request count, so it must stay at one and not follow the
+    # user-message count.
+    user_messages = [
+        message for message in copilot_body["messages"] if message.get("role") == "user"
+    ]
+    assert len(user_messages) >= 2
+    _write_corpus(
+        tmp_path,
+        {"records-20260101-000000.jsonl": [make_record("r1", copilot_body)]},
+    )
+
+    assert analysis.main(["--data-dir", str(tmp_path), "--rules", str(RULES_PATH)]) == 0
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["corpus"]["files"][0]["requests"] == 1
+    assert report["corpus"]["files"][0]["turns"] == 1
+    assert report["corpus"]["totals"]["turns"] == 1
+    assert report["definitions"]["turn"] == (
+        "a request whose message list contains at least one user message "
+        "(a request-level unit, not a user-message count)"
+    )
+
+
+def test_duplicate_request_ids_count_once(
+    analysis: Any,
+    copilot_body: dict[str, Any],
+    make_record: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Retry/pass records repeat a request_id; the request count must dedupe
+    # them even though every record is still reported in the raw record count.
+    _write_corpus(
+        tmp_path,
+        {
+            "records-20260101-000000.jsonl": [
+                make_record("r1", copilot_body, timestamp=1.0),
+                make_record("r1", copilot_body, timestamp=2.0),
+            ]
+        },
+    )
+
+    assert analysis.main(["--data-dir", str(tmp_path), "--rules", str(RULES_PATH)]) == 0
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["corpus"]["files"][0]["records"] == 2
+    assert report["corpus"]["files"][0]["requests"] == 1
+    assert report["corpus"]["files"][0]["turns"] == 1
+    assert report["corpus"]["totals"]["records"] == 2
+    assert report["corpus"]["totals"]["requests"] == 1
+    assert report["corpus"]["totals"]["turns"] == 1
+
+
 def test_preamble_share_after_uses_the_trimmed_body(
     analysis: Any,
     make_record: Any,

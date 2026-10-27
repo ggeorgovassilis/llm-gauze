@@ -1,6 +1,7 @@
 # llm-gauze
 
 [![CI](https://github.com/ggeorgovassilis/llm-gauze/actions/workflows/ci.yml/badge.svg)](https://github.com/ggeorgovassilis/llm-gauze/actions/workflows/ci.yml)
+[![Licence: MIT](https://img.shields.io/badge/Licence-MIT-blue.svg)](https://github.com/ggeorgovassilis/llm-gauze/blob/main/LICENSE)
 
 llm-gauze is an HTTP gateway that sits in front of a local LLM (served via an
 OpenAI-compatible API) and works around its shortcomings: transient errors
